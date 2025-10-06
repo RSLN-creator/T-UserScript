@@ -1,0 +1,986 @@
+// ==UserScript==
+// @name        EHentai/EXH Modern UI 1.0.0
+// @namespace   https://ehx-modern-ui-1.0.0
+// @version     1.0.0
+// @description 提供卡片动画网格体验，蓝白色调界面，左侧标签栏可隐藏，支持中、日、英菜单翻译，增强的阅读模式与自适应布局
+// @author      RSYHN
+// @match       https://e-hentai.org/*
+// @match       https://exhentai.org/*
+// @run-at      document-end
+// @grant       GM_addStyle
+// @grant       GM_setValue
+// @grant       GM_getValue
+// @grant       GM_registerMenuCommand
+// ==/UserScript==
+
+(function () {
+  'use strict';
+
+  // ---------- GM_get/set 辅助函数 ----------
+  const GMget = (k, d) => (typeof GM_getValue === 'function' ? GM_getValue(k, d) : d);
+  const GMset = (k, v) => (typeof GM_setValue === 'function' ? GM_setValue(k, v) : null);
+
+  // ---------- 网格自定义标记逻辑 ----------
+  const GRID_CUSTOM_FLAG = 'ehx_grid_custom_set';
+  const hasGridCustom = !!GMget(GRID_CUSTOM_FLAG, false);
+
+  // ---------- 持久化状态 ----------
+  const st = {
+    imgFit: GMget('ehx_imgFit', true),
+    gridCols: hasGridCustom ? GMget('ehx_gridCols', 5) : 5,
+    gridRows: hasGridCustom ? GMget('ehx_gridRows', 0) : 0,
+    lang: GMget('ehx_lang', 'auto'),
+    fontSize: GMget('ehx_fontSize', 14),
+    sidebarCollapsed: GMget('ehx_sidebarCollapsed', false),
+    readingMode: GMget('ehx_readingMode', 'vertical'),
+  };
+  const save = (k, v) => { GMset('ehx_' + k, v); st[k] = v; applyRuntimeToggles(); };
+
+  // ---------- 小工具函数 ----------
+  function clampInt(v, lo, hi){ v = parseInt(v||0,10); if(isNaN(v)) v=lo; return Math.max(lo, Math.min(hi, v)); }
+  function escapeHtml(s){ return (s||'').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
+  function isVisible(el){
+    if(!el) return false;
+    if(el.offsetParent === null) return false;
+    const r = el.getBoundingClientRect();
+    return !!(r.width && r.height);
+  }
+
+  // ---------- 翻译文本集合 ----------
+  const langTexts = {
+    en: {
+      'EHX Modern UI': 'EHX Modern UI',
+      'Language': 'Language',
+      'Auto (Browser)': 'Auto (Browser)',
+      'Note: This is for UI language.': 'Note: This is for UI language.',
+      'Settings': 'Settings',
+      'Fit image to page width': 'Fit image to page width',
+      'Font Size': 'Font Size',
+      'Tips': 'Tips',
+      'Cols': 'Cols',
+      'Rows (0=auto)': 'Rows (0=auto)',
+      'Apply Grid': 'Apply Grid',
+      'Favorite (Not Functional)': 'Favorite (Not Functional)',
+      'Left nav, grid settings are on gallery page, gallery lists are card grids.': 'Left nav, grid settings are on gallery page, gallery lists are card grids.',
+      'Next': 'Next',
+      'Last': 'Last',
+      'Jump/Seek': 'Jump/Seek',
+      'Previous': 'Previous',
+      'First': 'First',
+      'Front Page': 'Front Page',
+      'Watched': 'Watched',
+      'Popular': 'Popular',
+      'Torrents': 'Torrents',
+      'Favorites': 'Favorites',
+      'My Home': 'My Home',
+      'My Uploads': 'My Uploads',
+      'Toplists': 'Toplists',
+      'Bounties': 'Bounties',
+      'News': 'News',
+      'Forums': 'Forums',
+      'Wiki': 'Wiki',
+      'HentaiVerse': 'HentaiVerse',
+      'Reading Mode': 'Reading Mode',
+      'Vertical': 'Vertical',
+      'Horizontal': 'Horizontal',
+      'Keyboard Shortcuts': 'Keyboard Shortcuts',
+      '→/←: Scroll page': '→/←: Scroll page',
+      'W/S: Scroll up/down': 'W/S: Scroll up/down',
+      'Click image: Fullscreen': 'Click image: Fullscreen'
+    },
+    zh: {
+      'EHX Modern UI': 'EHX 现代 UI',
+      'Language': '语言',
+      'Auto (Browser)': '自动 (浏览器)',
+      'Note: This is for UI language.': '注：此处为 UI 语言。',
+      'Settings': '设置',
+      'Fit image to page width': '图片自适应页面宽度',
+      'Font Size': '字体大小',
+      'Tips': '提示',
+      'Cols': '列数',
+      'Rows (0=auto)': '行数 (0=自动)',
+      'Apply Grid': '应用网格',
+      'Favorite (Not Functional)': '收藏（暂不可用）',
+      'Left nav, grid settings are on gallery page, gallery lists are card grids.': '导航已左移，网格设置在画廊顶部。画廊列表已优化为卡片网格。',
+      'Next': '下一页',
+      'Last': '最后一页',
+      'Jump/Seek': '跳转',
+      'Previous': '上一页',
+      'First': '第一页',
+      'Front Page': '首页',
+      'Watched': '已关注',
+      'Popular': '热门',
+      'Torrents': '种子',
+      'Favorites': '收藏',
+      'My Home': '我的主页',
+      'My Uploads': '我的上传',
+      'Toplists': '排行榜',
+      'Bounties': '悬赏',
+      'News': '新闻',
+      'Forums': '论坛',
+      'Wiki': '维基',
+      'HentaiVerse': 'HentaiVerse',
+      'Reading Mode': '阅读模式',
+      'Vertical': '垂直',
+      'Horizontal': '水平',
+      'Keyboard Shortcuts': '键盘快捷键',
+      '→/←: Scroll page': '→/←: 翻页滚动',
+      'W/S: Scroll up/down': 'W/S: 上下滚动',
+      'Click image: Fullscreen': '点击图片: 全屏'
+    },
+    ja: {
+      'EHX Modern UI': 'EHX モダンUI',
+      'Language': '言語',
+      'Auto (Browser)': '自動（ブラウザ）',
+      'Note: This is for UI language.': '注: これはUI言語です。',
+      'Settings': '設定',
+      'Fit image to page width': '画像幅をページに合わせる',
+      'Font Size': 'フォントサイズ',
+      'Tips': 'ヒント',
+      'Cols': '列数',
+      'Rows (0=auto)': '行数（0=自動）',
+      'Apply Grid': '適用',
+      'Favorite (Not Functional)': 'お気に入り（未実装）',
+      'Left nav, grid settings are on gallery page, gallery lists are card grids.': '左ナビ、グリッド設定はギャラリーページにあります。リストはカードグリッドに最適化されています。',
+      'Next': '次へ',
+      'Last': '最後',
+      'Jump/Seek': 'ジャンプ',
+      'Previous': '前へ',
+      'First': '最初',
+      'Front Page': 'フロントページ',
+      'Watched': 'ウォッチ',
+      'Popular': '人気',
+      'Torrents': 'トレント',
+      'Favorites': 'お気に入り',
+      'My Home': 'マイホーム',
+      'My Uploads': 'アップロード',
+      'Toplists': 'トップリスト',
+      'Bounties': 'バウンティ',
+      'News': 'ニュース',
+      'Forums': 'フォーラム',
+      'Wiki': 'ウィキ',
+      'HentaiVerse': 'HentaiVerse',
+      'Reading Mode': '閲覧モード',
+      'Vertical': '垂直',
+      'Horizontal': '水平',
+      'Keyboard Shortcuts': 'キーボードショートカット',
+      '→/←: Scroll page': '→/←: ページスクロール',
+      'W/S: Scroll up/down': 'W/S: 上下スクロール',
+      'Click image: Fullscreen': '画像クリック: 全画面'
+    }
+  };
+  const getTranslatedText = (k, lang) => {
+    lang = lang || (st.lang === 'auto' ? (navigator.language || 'en').slice(0, 2) : st.lang);
+    return (langTexts[lang] && langTexts[lang][k]) || (langTexts['en'][k]) || k;
+  };
+
+  // ---------- 样式定义 ----------
+  GM_addStyle(`
+    :root{
+      --ehx-bg:#f8f9fb; --ehx-panel:#fff; --ehx-accent:#0096ff; --ehx-subtext:#707070; --ehx-border:#e6e8eb;
+      --ehx-radius:12px; --ehx-shadow:0 8px 24px rgba(0,0,0,0.04); --ehx-sidebar-w:240px; --ehx-gap:20px; --ehx-font-size:${st.fontSize}px;
+      --ehx-content-max:1200px;
+    }
+    body.ehx-on { background:var(--ehx-bg) !important; color:#222 !important; font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial; }
+    body.ehx-on, body.ehx-on * { font-size: var(--ehx-font-size); }
+
+    .ehx-shell { display:grid; grid-template-columns: var(--ehx-sidebar-w) 1fr; gap: var(--ehx-gap); min-height:100vh; transition: grid-template-columns .28s ease; }
+    .ehx-sidebar { position:sticky; top:0; height:100vh; overflow:auto; background:var(--ehx-panel); border-right:1px solid var(--ehx-border); padding:16px; box-sizing:border-box; display:flex; flex-direction:column; z-index:9999; transition:opacity .2s ease, transform .28s ease, width .28s ease; }
+    /* 侧边栏折叠样式 */
+    body.ehx-sidebar-collapsed .ehx-shell { grid-template-columns: 0 1fr; }
+    body.ehx-sidebar-collapsed .ehx-sidebar { width:0 !important; opacity:0; pointer-events:none; }
+    body.ehx-sidebar-collapsed .ehx-main { width: min(var(--ehx-content-max), calc(100% - 2*var(--ehx-gap))); margin-left:auto; margin-right:auto; }
+
+    .ehx-brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 700;
+      color: var(--ehx-accent);
+      margin-bottom: 8px;
+    }
+    .ehx-brand #ehx-collapse-btn{margin-left:auto;border:0;background:transparent;cursor:pointer;font-size:18px;}
+    .ehx-nav{margin-top:6px;display:flex;flex-direction:column;gap:6px;flex-grow:1;}
+    .ehx-nav a{padding:10px 12px;border-radius:10px;display:flex;gap:10px;align-items:center;text-decoration:none;color:inherit;}
+    .ehx-nav a:hover{background:rgba(0,150,255,0.06);}
+
+    /* 重复项隐藏样式 */
+    .ehx-duplicate-hidden {
+        display: none !important;
+    }
+
+    .ehx-main{padding:20px;box-sizing:border-box;max-width:calc(100vw - var(--ehx-sidebar-w) - 2*var(--ehx-gap)); width:calc(100vw - var(--ehx-sidebar-w) - 2*var(--ehx-gap)); transition:margin .28s ease, width .28s ease;}
+
+    /* 卡片网格样式 */
+    .ehx-grid{display:grid;gap:20px;grid-auto-rows:1fr;}
+    .ehx-cell{background:var(--ehx-panel);border-radius:var(--ehx-radius);overflow:hidden;box-shadow:var(--ehx-shadow);display:flex;flex-direction:column;text-decoration:none;color:inherit;position:relative;transition:transform .18s ease,box-shadow .18s ease;}
+    .ehx-cell:hover{transform:translateY(-6px);box-shadow:0 14px 40px rgba(0,0,0,0.12);}
+    .ehx-thumb{position:relative;width:100%;height:0;padding-bottom:141.42%;background:#f0f0f0;overflow:hidden;}
+    .ehx-thumb img{position:absolute;left:0;top:0;width:100%;height:100%;object-fit:cover;display:block;}
+    .ehx-meta{padding:12px;display:flex;flex-direction:column;gap:8px;color:var(--ehx-subtext);min-height:64px;}
+    .ehx-title{font-weight:600;color:#1e293b;font-size:15px;line-height:1.2;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;text-overflow:ellipsis;}
+    .ehx-info{font-size:12px;color:var(--ehx-subtext);max-height:1.6em;overflow:hidden;transition:max-height .22s ease,opacity .22s ease;white-space:nowrap;text-overflow:ellipsis;}
+    .ehx-cell:hover .ehx-info{max-height:6em;white-space:normal;overflow:auto;}
+    .ehx-favorite-btn{position:absolute;top:10px;right:10px;width:36px;height:36px;border-radius:50%;background:rgba(255,255,255,0.85);display:flex;align-items:center;justify-content:center;box-shadow:0 4px 12px rgba(0,0,0,0.06);border:1px solid var(--ehx-border);cursor:pointer;}
+    .ehx-favorite-btn:hover{background:rgba(255,255,255,1);transform:scale(1.03);}
+
+    /* 工具栏和分页样式 */
+    .ehx-grid-toolbar{display:flex;justify-content:flex-end;gap:10px;margin-bottom:16px;align-items:center;}
+    .ptt td a{background:var(--ehx-panel);border:1px solid var(--ehx-border);border-radius:8px;padding:6px 10px;color:inherit;}
+
+    /* 确保搜索元素可见 */
+    form[action*="search"], #searchform, .gsearch, .srch, #taglist { visibility:visible !important; opacity:1 !important; display:block !important; }
+
+    /* 侧边栏折叠时的显示按钮 */
+    .ehx-show-sidebar-btn{position:fixed;left:8px;top:8px;z-index:11000;width:40px;height:40px;border-radius:8px;display:none;align-items:center;justify-content:center;background:#fff;border:1px solid var(--ehx-border);box-shadow:0 6px 18px rgba(0,0,0,0.08);cursor:pointer;}
+    body.ehx-sidebar-collapsed .ehx-show-sidebar-btn{display:flex;}
+
+    .ehx-select {
+      background-color: #fff;
+      color: #000;
+      padding: 4px 8px;
+      border-radius: 6px;
+      border: 1px solid var(--ehx-border);
+      margin: 4px 0;
+    }
+
+    .ehx-section {
+      margin: 16px 0;
+      padding: 8px 0;
+      border-top: 1px solid var(--ehx-border);
+    }
+
+    .ehx-label {
+      font-weight: 600;
+      margin-bottom: 8px;
+      color: #333;
+    }
+
+    .ehx-control {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .ehx-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .ehx-number, .ehx-range {
+      padding: 4px 8px;
+      border-radius: 6px;
+      border: 1px solid var(--ehx-border);
+      width: 60px;
+    }
+
+    .ehx-range {
+      width: 120px;
+    }
+
+    .ehx-btn {
+      background: var(--ehx-accent);
+      color: white;
+      border: none;
+      border-radius: 6px;
+      padding: 6px 12px;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+
+    .ehx-btn:hover {
+      background: #007bcc;
+    }
+
+    /* 阅读模式增强样式 */
+    #i3 {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 20px;
+      padding: 20px 0;
+    }
+
+    #i3 img {
+      max-width: 95vw !important;
+      height: auto !important;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+      transition: transform 0.2s;
+    }
+
+    #i3 img:hover {
+      transform: scale(1.01);
+    }
+
+    /* 阅读模式为水平时的样式 */
+    body.ehx-reading-horizontal #i3 {
+      flex-direction: row;
+      flex-wrap: nowrap;
+      overflow-x: auto;
+      padding: 20px;
+      height: calc(100vh - 40px);
+      align-items: center;
+    }
+
+    body.ehx-reading-horizontal #i3 img {
+      max-height: 90vh !important;
+      max-width: auto !important;
+    }
+
+    /* 全屏图片样式 */
+    #i3 img:fullscreen {
+      max-width: 100vw !important;
+      max-height: 100vh !important;
+      object-fit: contain;
+      background: #000;
+    }
+  `);
+
+  // ---------- 导航重复项检查与修复 ----------
+  function checkAndRemoveNavDuplicates() {
+    // 需要检查重复的导航项文本（英文原版）
+    const targetNavItems = [
+        'Front Page',
+        'Watched',
+        'Popular',
+        'Torrents',
+        'Favorites',
+        'My Home',
+        'My Uploads',
+        'Toplists',
+        'Bounties',
+        'News',
+        'Forums',
+        'Wiki',
+        'HentaiVerse'
+    ];
+
+    // 获取导航容器
+    const navContainer = document.querySelector('.ehx-nav');
+    if (!navContainer) {
+        console.log('EHX导航容器未找到');
+        return;
+    }
+
+    // 存储已发现的导航项
+    const foundItems = {};
+    targetNavItems.forEach(item => {
+        foundItems[item] = [];
+    });
+
+    // 获取所有导航链接
+    const navLinks = navContainer.querySelectorAll('a');
+    if (navLinks.length === 0) {
+        console.log('未找到导航链接');
+        return;
+    }
+
+    // 遍历所有链接，找到目标导航项
+    navLinks.forEach(link => {
+        // 获取链接文本（去重处理）
+        const linkText = link.textContent.trim();
+
+        // 检查链接文本是否匹配目标项（考虑可能的翻译）
+        for (const target of targetNavItems) {
+            // 尝试通过原始文本查找
+            if (linkText === target) {
+                foundItems[target].push(link);
+                break;
+            }
+
+            // 尝试通过翻译映射查找
+            const translations = {
+                'Front Page': ['首页', 'フロントページ'],
+                'Watched': ['已关注', 'ウォッチ'],
+                'Popular': ['热门', '人気'],
+                'Torrents': ['种子', 'トレント'],
+                'Favorites': ['收藏', 'お気に入り'],
+                'My Home': ['我的主页', 'マイホーム'],
+                'My Uploads': ['我的上传', 'アップロード'],
+                'Toplists': ['排行榜', 'トップリスト'],
+                'Bounties': ['悬赏', 'バウンティ'],
+                'News': ['新闻', 'ニュース'],
+                'Forums': ['论坛', 'フォーラム'],
+                'Wiki': ['维基', 'ウィキ'],
+                'HentaiVerse': ['HentaiVerse', 'HentaiVerse']
+            };
+
+            if (translations[target] && translations[target].includes(linkText)) {
+                foundItems[target].push(link);
+                break;
+            }
+        }
+    });
+
+    // 检查并隐藏重复项（保留第一个出现的，隐藏后续的）
+    let duplicatesFound = false;
+    for (const key in foundItems) {
+        const items = foundItems[key];
+        if (items.length > 1) {
+            duplicatesFound = true;
+            // 保留第一个，隐藏其余的
+            for (let i = 1; i < items.length; i++) {
+                items[i].classList.add('ehx-duplicate-hidden');
+                console.log(`已隐藏重复的导航项: ${key}`);
+            }
+        }
+    }
+
+    if (duplicatesFound) {
+        console.log('导航重复项检查完成，已处理所有重复项');
+    } else {
+        console.log('未发现导航重复项');
+    }
+  }
+
+  // ---------- 构建外壳（侧边栏 + 主内容区） ----------
+  function wrapSite(){
+    if(document.body.classList.contains('ehx-on')) return;
+    document.body.classList.add('ehx-on');
+
+    const shell = document.createElement('div'); shell.className = 'ehx-shell';
+    const sidebar = document.createElement('aside'); sidebar.className = 'ehx-sidebar';
+    const main = document.createElement('main'); main.className = 'ehx-main';
+
+    // 填充侧边栏HTML（控件 + 品牌）
+    sidebar.innerHTML = `
+      <div class="ehx-brand">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 2a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2Z"/><path d="M10 16v1.5a2.5 2.5 0 0 0 5 0V16"/></svg>
+        <span id="ehx-brand-text">${getTranslatedText('EHX Modern UI')}</span>
+        <button id="ehx-collapse-btn" title="Toggle sidebar">☰</button>
+      </div>
+      <nav class="ehx-nav" id="ehx-nav"></nav>
+
+      <div class="ehx-section">
+        <div class="ehx-label">${getTranslatedText('Language')}</div>
+        <div class="ehx-control">
+          <select id="ehx-lang" class="ehx-select">
+            <option value="auto">${getTranslatedText('Auto (Browser)')}</option>
+            <option value="en">English</option>
+            <option value="zh">中文</option>
+            <option value="ja">日本語</option>
+          </select>
+          <div class="ehx-row" style="font-size:12px;color:var(--ehx-subtext);"><span>${getTranslatedText('Note: This is for UI language.')}</span></div>
+        </div>
+      </div>
+
+      <div class="ehx-section">
+        <div class="ehx-label">⚙︎ ${getTranslatedText('Settings')}</div>
+        <div class="ehx-control">
+          <label class="ehx-row"><input id="ehx-fit" type="checkbox" class="ehx-switch"/> ${getTranslatedText('Fit image to page width')}</label>
+          <div class="ehx-row">
+            <span>${getTranslatedText('Font Size')}:</span>
+            <input id="ehx-font-size-range" type="range" min="12" max="20" step="1" class="ehx-range"/>
+            <span id="ehx-font-size-val">${st.fontSize}px</span>
+          </div>
+          <div class="ehx-row">
+            <span>${getTranslatedText('Reading Mode')}:</span>
+            <select id="ehx-reading-mode" class="ehx-select">
+              <option value="vertical">${getTranslatedText('Vertical')}</option>
+              <option value="horizontal">${getTranslatedText('Horizontal')}</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div class="ehx-section">
+        <div class="ehx-label">⌨️ ${getTranslatedText('Keyboard Shortcuts')}</div>
+        <div class="ehx-control" style="font-size:12px;color:var(--ehx-subtext);">
+          <div>• ${getTranslatedText('→/←: Scroll page')}</div>
+          <div>• ${getTranslatedText('W/S: Scroll up/down')}</div>
+          <div>• ${getTranslatedText('Click image: Fullscreen')}</div>
+        </div>
+      </div>
+
+      <div class="ehx-section">
+        <div class="ehx-label">💡 ${getTranslatedText('Tips')}</div>
+        <div class="ehx-control" style="font-size:12px;color:var(--ehx-subtext);">
+          <div>• ${getTranslatedText('Left nav, grid settings are on gallery page, gallery lists are card grids.')}</div>
+        </div>
+      </div>
+    `;
+
+    // 将原始body子元素移动到main中（保留内容）
+    while(document.body.firstChild){
+      const n = document.body.firstChild;
+      if(n === shell) break;
+      main.appendChild(n);
+    }
+
+    shell.appendChild(sidebar);
+    shell.appendChild(main);
+    document.body.appendChild(shell);
+
+    // 显示侧边栏按钮（仅在折叠时可见）
+    const showBtn = document.createElement('button');
+    showBtn.className = 'ehx-show-sidebar-btn';
+    showBtn.title = 'Show sidebar';
+    showBtn.innerHTML = '☰';
+    showBtn.addEventListener('click', () => toggleSidebar(false));
+    document.body.appendChild(showBtn);
+
+    // 构建左侧导航（完全使用557版本逻辑）
+    buildLeftNav(sidebar);
+
+    // 在导航构建完成后检查并移除重复项
+    checkAndRemoveNavDuplicates();
+
+    // 初始化控件
+    initControls(sidebar);
+
+    // 检查是否为阅读页面并应用增强功能
+    if (window.location.pathname.includes('/s/')) {
+      initReaderEnhancements();
+    } else {
+      // 网格化画廊/列表页面
+      const urlParams = new URLSearchParams(window.location.search);
+      const fSearchParam = urlParams.get('f_search');
+      const isMinimalMode = fSearchParam === 'fminimal' || fSearchParam === 'fminimalplus' || fSearchParam === 'fcompact';
+
+      if (!isMinimalMode) {
+        tryGridify(main);
+      }
+    }
+
+    // 恢复搜索UI
+    restoreSearchUI(main);
+
+    // 应用切换
+    applyRuntimeToggles();
+  }
+
+  // ---------- 构建左侧导航（完全照抄557版本实现） ----------
+  function buildLeftNav(sidebar) {
+    const nav = sidebar.querySelector('#ehx-nav');
+    nav.innerHTML = '';
+
+    // 557版本去重逻辑：使用链接作为唯一标识
+    const addedLinks = new Set();
+
+    // 提取页面现有导航链接
+    const navContainers = [
+      document.querySelector('#nb'),
+      document.querySelector('.ptt'),
+      document.querySelector('.ido'),
+      document.querySelector('table.ptt'),
+      document.body
+    ];
+
+    let pageLinks = [];
+    for (const container of navContainers) {
+      if (!container) continue;
+      const links = Array.from(container.querySelectorAll('a[href]'))
+        .filter(a => {
+          const href = a.getAttribute('href');
+          const text = (a.textContent || '').trim();
+          return href && text && href.length > 0 && text.length > 0;
+        });
+
+      if (links.length > 0) {
+        pageLinks = links;
+        break;
+      }
+    }
+
+    // 添加页面链接（去重）
+    pageLinks.forEach(link => {
+      const href = link.href;
+      const text = link.textContent.trim();
+
+      if (addedLinks.has(href) || !href || !text) return;
+
+      addedLinks.add(href);
+      const navLink = document.createElement('a');
+      navLink.href = href;
+      navLink.textContent = getTranslatedText(text); // 保留翻译
+      nav.appendChild(navLink);
+    });
+
+    // 557版本固定导航项（按原顺序）
+    const coreLinks = [
+      { href: '/', text: 'Front Page' },
+      { href: '/watched', text: 'Watched' },
+      { href: '/popular', text: 'Popular' },
+      { href: '/torrents.php', text: 'Torrents' },
+      { href: '/favorites.php', text: 'Favorites' },
+      { href: '/home.php', text: 'My Home' },
+      { href: '/upload.php', text: 'My Uploads' },
+      { href: '/toplist.php', text: 'Toplists' },
+      { href: '/bounties.php', text: 'Bounties' },
+      { href: '/news.php', text: 'News' },
+      { href: '/forums.php', text: 'Forums' },
+      { href: '/wiki.php', text: 'Wiki' },
+      { href: '/hentaiverse.php', text: 'HentaiVerse' }
+    ];
+
+    // 添加核心导航项（去重）
+    coreLinks.forEach(item => {
+      const normalizedHref = new URL(item.href, window.location.origin).href;
+
+      if (addedLinks.has(normalizedHref)) return;
+
+      addedLinks.add(normalizedHref);
+      const navLink = document.createElement('a');
+      navLink.href = item.href;
+      navLink.textContent = getTranslatedText(item.text); // 保留翻译
+      nav.appendChild(navLink);
+    });
+  }
+
+  // ---------- 切换侧边栏折叠状态 ----------
+  function toggleSidebar(collapse){
+    const should = (collapse === undefined) ? !st.sidebarCollapsed : !!collapse;
+    GMset('ehx_sidebarCollapsed', should);
+    st.sidebarCollapsed = should;
+    document.body.classList.toggle('ehx-sidebar-collapsed', should);
+  }
+
+  // ---------- 初始化控件 ----------
+  function initControls(sidebar){
+    const langSelect = sidebar.querySelector('#ehx-lang');
+    langSelect.value = st.lang;
+    const fitCheckbox = sidebar.querySelector('#ehx-fit');
+    fitCheckbox.checked = !!st.imgFit;
+    const fontSizeRange = sidebar.querySelector('#ehx-font-size-range');
+    const fontSizeVal = sidebar.querySelector('#ehx-font-size-val');
+    fontSizeRange.value = st.fontSize;
+    fontSizeVal.textContent = `${st.fontSize}px`;
+    const readingModeSelect = sidebar.querySelector('#ehx-reading-mode');
+    readingModeSelect.value = st.readingMode;
+
+    langSelect.addEventListener('change', e => {
+      GMset('ehx_lang', e.target.value);
+      location.reload();
+    });
+
+    fitCheckbox.addEventListener('change', e=>{
+      GMset('ehx_imgFit', !!e.target.checked);
+      st.imgFit = !!e.target.checked;
+      applyRuntimeToggles();
+    });
+
+    fontSizeRange.addEventListener('input', e=>{
+      const s = parseInt(e.target.value, 10);
+      GMset('ehx_fontSize', s);
+      st.fontSize = s;
+      fontSizeVal.textContent = `${s}px`;
+      applyRuntimeToggles();
+    });
+
+    readingModeSelect.addEventListener('change', e => {
+      const mode = e.target.value;
+      GMset('ehx_readingMode', mode);
+      st.readingMode = mode;
+      applyReadingMode();
+    });
+
+    const collapseBtn = sidebar.querySelector('#ehx-collapse-btn');
+    collapseBtn.addEventListener('click', ()=> toggleSidebar(!st.sidebarCollapsed));
+
+    // 应用初始折叠状态
+    document.body.classList.toggle('ehx-sidebar-collapsed', !!st.sidebarCollapsed);
+    // 应用初始阅读模式
+    applyReadingMode();
+  }
+
+  // ---------- 应用阅读模式 ----------
+  function applyReadingMode() {
+    document.body.classList.toggle('ehx-reading-horizontal', st.readingMode === 'horizontal');
+    document.body.classList.toggle('ehx-reading-vertical', st.readingMode === 'vertical');
+  }
+
+  // ---------- 运行时切换 ----------
+  function applyLangAttr(){
+    const lang = st.lang === 'auto' ? (navigator.language||'en').slice(0,2) : st.lang;
+    document.documentElement.setAttribute('lang', lang);
+    // 分页翻译
+    document.querySelectorAll('.ptt a').forEach(link=>{
+      const t = link.textContent.trim();
+      if(t === 'Next >') link.textContent = getTranslatedText('Next');
+      if(t === 'Last >>') link.textContent = getTranslatedText('Last');
+      if(t === '< Prev') link.textContent = getTranslatedText('Previous');
+      if(t === 'First <<') link.textContent = getTranslatedText('First');
+      if(t === 'Jump/Seek') link.textContent = getTranslatedText('Jump/Seek');
+    });
+  }
+
+  function applyFontSize(){
+    document.documentElement.style.setProperty('--ehx-font-size', `${st.fontSize}px`);
+  }
+
+  function applyImageFit() {
+    const images = document.querySelectorAll('#i3 img, .ehx-thumb img');
+    images.forEach(img => {
+      if (st.imgFit) {
+        img.style.maxWidth = '95vw';
+        img.style.height = 'auto';
+      } else {
+        img.style.maxWidth = '';
+        img.style.height = '';
+      }
+    });
+  }
+
+  function applyRuntimeToggles(){
+    applyFontSize();
+    applyLangAttr();
+    document.body.classList.toggle('ehx-fit', !!st.imgFit);
+    applyImageFit();
+  }
+
+  // ---------- 网格化列表布局 ----------
+  function tryGridify(main){
+    const itg = main.querySelector('.itg') || main.querySelector('table.itg');
+    if(!itg) return;
+    main.classList.add('ehx-gridify');
+
+    // 工具栏（只添加一次）
+    if(!itg.previousElementSibling || !itg.previousElementSibling.classList.contains('ehx-grid-toolbar')){
+      const toolbar = document.createElement('div');
+      toolbar.className = 'ehx-grid-toolbar';
+      const initialCols = st.gridCols;
+      const initialRows = st.gridRows;
+      toolbar.innerHTML = `
+        <div class="ehx-row"><span>${getTranslatedText('Cols')}:</span><input id="ehx-cols" type="number" min="2" max="12" step="1" class="ehx-number" value="${initialCols}"/></div>
+        <div class="ehx-row"><span>${getTranslatedText('Rows (0=auto)')}:</span><input id="ehx-rows" type="number" min="0" max="12" step="1" class="ehx-number" value="${initialRows}"/></div>
+        <button id="ehx-apply-grid" class="ehx-btn">${getTranslatedText('Apply Grid')}</button>
+      `;
+      itg.parentNode.insertBefore(toolbar, itg);
+
+      // 应用网格行为
+      toolbar.querySelector('#ehx-apply-grid').addEventListener('click', ()=>{
+        const cols = clampInt(parseInt(toolbar.querySelector('#ehx-cols').value || 0, 10), 2, 12);
+        const rows = clampInt(parseInt(toolbar.querySelector('#ehx-rows').value || 0, 10), 0, 12);
+        GMset('ehx_gridCols', cols);
+        GMset('ehx_gridRows', rows);
+        GMset(GRID_CUSTOM_FLAG, true);
+        st.gridCols = cols;
+        st.gridRows = rows;
+        applyGridStyles(toolbar.nextElementSibling);
+      });
+    }
+
+    // 收集项目
+    const rowAnchors = itg.querySelectorAll('a[href*="/g/"]');
+    const seen = new Set();
+    const items = [];
+    rowAnchors.forEach(a=>{
+      const href = a.getAttribute('href');
+      if(!href || seen.has(href)) return;
+      seen.add(href);
+      const container = a.closest('.gl1t, .gl3t, .glthumb, td') || a;
+      const img = container ? container.querySelector('img') : null;
+      const title = a.title || (img && img.alt) || (container && container.textContent.trim()) || a.textContent.trim();
+      const infoEl = container && (container.querySelector('.gld') || container.querySelector('.gtb') || container.querySelector('.gt') || container.querySelector('.gtl') || container.querySelector('.gtd'));
+      const info = infoEl ? infoEl.textContent.trim() : '';
+      items.push({href, thumbSrc: img ? (img.getAttribute('data-src') || img.src) : '', title, info});
+    });
+
+    if(!items.length) return;
+
+    const grid = document.createElement('div'); grid.className = 'ehx-grid';
+    items.forEach(it=>{
+      const cell = document.createElement('a'); cell.className = 'ehx-cell'; cell.href = it.href;
+      cell.innerHTML = `
+        <div class="ehx-thumb">${it.thumbSrc ? `<img loading="lazy" referrerpolicy="no-referrer" src="${it.thumbSrc}" alt="${escapeHtml(it.title)}">` : ''}</div>
+        <div class="ehx-meta">
+          <div class="ehx-title">${escapeHtml(it.title||'')}</div>
+          <div class="ehx-info">${escapeHtml(it.info||'')}</div>
+        </div>
+        <div class="ehx-favorite-btn" title="${getTranslatedText('Favorite (Not Functional)')}">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.76-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/></svg>
+        </div>
+      `;
+      grid.appendChild(cell);
+    });
+
+    itg.replaceWith(grid);
+    applyGridStyles(grid);
+
+    // 添加画廊标题
+    const galleryTitle = main.querySelector('#gn, #gj');
+    if(galleryTitle){
+      const titleEl = document.createElement('h1'); titleEl.className = 'ehx-gallery-title';
+      titleEl.textContent = galleryTitle.textContent.trim();
+      grid.parentNode.insertBefore(titleEl, grid);
+    }
+  }
+
+  function applyGridStyles(gridElement){
+    const cols = clampInt(st.gridCols, 2, 12);
+    const rows = clampInt(st.gridRows, 0, 12);
+    gridElement.style.gridTemplateColumns = `repeat(${cols}, minmax(0, 1fr))`;
+    if(rows > 0){
+      gridElement.style.maxHeight = `${rows * 260}px`;
+      gridElement.style.overflow = 'auto';
+    } else {
+      gridElement.style.maxHeight = '';
+      gridElement.style.overflow = '';
+    }
+  }
+
+  // ---------- 恢复搜索UI ----------
+  function restoreSearchUI(main){
+    if (window.location.pathname === '/' || window.location.pathname === '/watched') {
+      return;
+    }
+    try{
+      // 找到原始表单
+      let origForm = document.querySelector('form[action*="search"], form[name*="f_search"], form#searchform');
+      if(!origForm) origForm = document.querySelector('input[name="f_search"], input[type="search"]')?.closest('form');
+
+      // 检查是否已有可见的搜索表单
+      const existingVisible = main.querySelector('form[action*="search"], #searchform, .gsearch, .srch, #taglist');
+      if(existingVisible && isVisible(existingVisible)) return;
+
+      if(!origForm) return;
+
+      // 克隆并插入到main顶部
+      const clone = origForm.cloneNode(true);
+      clone.id = 'ehx-cloned-searchform';
+      clone.style.display = 'block';
+      clone.style.opacity = '1';
+      clone.style.visibility = 'visible';
+
+      const containerId = 'ehx-searchbar-container';
+      if(!document.getElementById(containerId)){
+        const container = document.createElement('div'); container.id = containerId;
+        container.style.marginBottom = '12px'; container.className = 'ehx-card';
+        // 插入到顶部
+        main.insertBefore(container, main.firstChild);
+        container.appendChild(clone);
+        // 强制显示可能被隐藏的元素
+        clone.querySelectorAll('select, label, .taglist, .gsearch, .srch, .searchbox').forEach(el=>{
+          el.style.display = 'inline-block'; el.style.visibility='visible'; el.style.opacity='1';
+        });
+      }
+    }catch(e){
+      console.warn('EHX restoreSearchUI error', e);
+    }
+  }
+
+  // ---------- 阅读模式增强功能 ----------
+  function initReaderEnhancements() {
+    // 自动设置为Vertical模式（如果尚未设置）
+    if (document.querySelector('#d') === null) {
+      let vertBtn = document.querySelector('a[href*="&nw=vert"]');
+      if (vertBtn) {
+        // 检查URL中是否已有垂直模式参数
+        if (!window.location.href.includes('&nw=vert')) {
+          vertBtn.click();
+          return; // 等待页面重新加载
+        }
+      }
+    }
+
+    const container = document.querySelector('#i3');
+    if (!container) return;
+
+    let loading = false;
+
+    // 无限滚动
+    window.addEventListener('scroll', async () => {
+      // 水平模式下不启用无限滚动
+      if (st.readingMode === 'horizontal') return;
+      if (loading) return;
+      // 接近页面底部时加载下一页
+      if (window.innerHeight + window.scrollY >= document.body.scrollHeight - 200) {
+        loading = true;
+        let nextLink = document.querySelector('#ib a[onclick]');
+        if (nextLink) {
+          try {
+            const nextUrl = nextLink.href;
+            let resp = await fetch(nextUrl);
+            let html = await resp.text();
+            let doc = new DOMParser().parseFromString(html, 'text/html');
+            let nextImg = doc.querySelector('#i3 img');
+            if (nextImg) {
+              let newDiv = document.createElement('div');
+              newDiv.style.marginTop = "20px";
+              newDiv.appendChild(nextImg);
+              container.appendChild(newDiv);
+              // 应用图片自适应设置
+              applyImageFit();
+            }
+            // 更新URL但不刷新页面
+            history.replaceState(null, "", nextUrl);
+          } catch (e) {
+            console.error('Failed to load next page:', e);
+          } finally {
+            loading = false;
+          }
+        } else {
+          loading = false;
+        }
+      }
+    });
+
+    // 键盘快捷键
+    document.addEventListener('keydown', e => {
+      // 避免在输入框中触发快捷键
+      if (['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) return;
+
+      switch(e.key) {
+        case 'ArrowRight':
+          window.scrollBy(0, st.readingMode === 'horizontal' ? window.innerWidth : window.innerHeight);
+          break;
+        case 'ArrowLeft':
+          window.scrollBy(0, st.readingMode === 'horizontal' ? -window.innerWidth : -window.innerHeight);
+          break;
+        case 'w': case 'W': window.scrollBy(0, -100); break;
+        case 's': case 'S': window.scrollBy(0, 100); break;
+      }
+    });
+
+    // 图片点击全屏
+    container.addEventListener('click', e => {
+      if (e.target.tagName === 'IMG') {
+        if (!document.fullscreenElement) {
+          e.target.requestFullscreen().catch(err => {
+            console.error(`Error attempting to enable full-screen mode: ${err.message}`);
+          });
+        } else {
+          if (document.exitFullscreen) {
+            document.exitFullscreen();
+          }
+        }
+      }
+    });
+  }
+
+  // ---------- 启动 ----------
+  function start(){
+    if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', wrapSite);
+    else wrapSite();
+  }
+  start();
+
+  // ---------- 菜单重置 ----------
+  GM_registerMenuCommand('Reset EHX UI Settings', ()=>{
+    ['imgFit','gridCols','gridRows','lang','fontSize','sidebarCollapsed', 'readingMode', GRID_CUSTOM_FLAG].forEach(k => GMset('ehx_'+k, undefined));
+    GMset(GRID_CUSTOM_FLAG, undefined);
+    // 自定义消息框
+    const msgBox = document.createElement('div');
+    msgBox.style.cssText = `
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        background: white;
+        padding: 20px;
+        border: 1px solid #ccc;
+        border-radius: 8px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        z-index: 10000;
+        text-align: center;
+    `;
+    msgBox.innerHTML = `
+        <p>已重置。刷新页面生效。</p>
+        <button onclick="this.parentNode.remove()">确定</button>
+    `;
+    document.body.appendChild(msgBox);
+  });
+
+})();
