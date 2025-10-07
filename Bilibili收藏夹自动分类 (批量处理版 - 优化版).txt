@@ -1,15 +1,15 @@
 // ==UserScript==
-// @name          Bilibili收藏夹自动分类 (批量处理版 - 优化版)
-// @namespace     http://tampermonkey.net/
-// @version       2.1
-// @description  B站收藏夹视频自动分类，采用批量API，高效稳定，优化速率限制和进度显示，!!!原脚本来源于 https://github.com/jqwgt
-// @author       RSYHN         https://space.bilibili.com/484456494?spm_id_from=333.1007.0.0
-// @license      GPL-3.0-or-later
-// @match        *://space.bilibili.com/*/favlist*
-// @grant        GM_xmlhttpRequest
-// @grant        GM_addStyle
-// @connect      api.bilibili.com
-// @note        原脚本来源于 https://github.com/jqwgt
+// @name         Bilibili收藏夹自动分类 (批量处理版 - 优化版)
+// @namespace    http://tampermonkey.net/
+// @version      2.2
+// @description  B站收藏夹视频自动分类，采用批量API，高效稳定，优化速率限制和进度显示，!!!原脚本来源于 https://github.com/jqwgt
+// @author       RSYHN         https://space.bilibili.com/484456494?spm_id_from=333.1007.0.0
+// @license      GPL-3.0-or-later
+// @match        *://space.bilibili.com/*/favlist*
+// @grant        GM_xmlhttpRequest
+// @grant        GM_addStyle
+// @connect      api.bilibili.com
+// @note         原脚本来源于 https://github.com/jqwgt
 // ==/UserScript==
 
 (function() {
@@ -35,6 +35,8 @@
             overflow-y: auto;
             width: 700px;
             max-width: 90vw;
+            display: flex;
+            flex-direction: column;
         }
         .bili-classifier-modal h3 {
             margin-top: 0;
@@ -114,9 +116,9 @@
         .bili-classifier-footer {
             display: flex;
             justify-content: flex-end;
-            margin-top: 20px;
             padding-top: 15px;
             border-top: 1px solid #eee;
+            margin-top: auto; /* 固定到底部 */
         }
         .bili-classifier-progress {
             position: fixed;
@@ -188,6 +190,11 @@
             border: 1px solid #eee;
             border-radius: 8px;
         }
+        /* 内容区域，确保footer可以固定到底部 */
+        .bili-classifier-content {
+            flex: 1;
+            overflow-y: auto;
+        }
     `);
 
     // --- 全局状态和辅助函数 ---
@@ -230,6 +237,13 @@
                 onerror: reject
             });
         });
+    }
+
+    // 查找现有收藏夹ID（按名称精确匹配）
+    async function findExistingFolderId(folderName) {
+        const folders = await getUserFavLists();
+        const folder = folders.find(f => f.title.trim() === folderName.trim());
+        return folder ? folder.id : null;
     }
 
     // 获取视频详细信息 (精简日志)
@@ -312,6 +326,14 @@
 
     // 创建新收藏夹
     async function createFolder(title) {
+        // 先检查是否已有同名收藏夹
+        const existingId = await findExistingFolderId(title);
+        if (existingId) {
+            log(`已存在同名收藏夹 "${title}"，将使用现有收藏夹`, 'info');
+            return existingId;
+        }
+
+        // 如果不存在则创建新的
         return new Promise((resolve, reject) => {
             GM_xmlhttpRequest({
                 method: 'POST',
@@ -412,28 +434,29 @@
         let html = `
             <h3>收藏夹自动分类</h3>
 
-            <div class="bili-classifier-radio-group">
-                <label class="bili-classifier-radio-label">
-                    <input type="radio" name="operationMode" value="copy" checked> 复制模式
-                </label>
-                <label class="bili-classifier-radio-label">
-                    <input type="radio" name="operationMode" value="move"> 移动模式 (将视频移出原收藏夹)
-                </label>
-            </div>
+            <div class="bili-classifier-content">
+                <div class="bili-classifier-radio-group">
+                    <label class="bili-classifier-radio-label">
+                        <input type="radio" name="operationMode" value="copy" checked> 复制模式
+                    </label>
+                    <label class="bili-classifier-radio-label">
+                        <input type="radio" name="operationMode" value="move"> 移动模式 (将视频移出原收藏夹)
+                    </label>
+                </div>
 
-            <div class="bili-classifier-option-group">
-                <label class="bili-classifier-checkbox-label">
-                    <input type="checkbox" id="autoClassifyUnassigned" checked>
-                    对未自定义分组的视频自动按分区分类 (推荐)
-                </label>
-            </div>
+                <div class="bili-classifier-option-group">
+                    <label class="bili-classifier-checkbox-label">
+                        <input type="checkbox" id="autoClassifyUnassigned" checked>
+                        对未自定义分组的视频自动按分区分类 (推荐)
+                    </label>
+                </div>
 
-            <div style="margin-bottom: 20px">
-                <button class="bili-classifier-btn" id="addCustomGroup">添加自定义分组</button>
-            </div>
-            <div id="customGroups"></div>
-            <div id="defaultGroups">
-                <h4>视频分区列表 (${Object.keys(tidGroups).length}个分区)</h4>
+                <div style="margin-bottom: 20px">
+                    <button class="bili-classifier-btn" id="addCustomGroup">添加自定义分组</button>
+                </div>
+                <div id="customGroups"></div>
+                <div id="defaultGroups">
+                    <h4>视频分区列表 (${Object.keys(tidGroups).length}个分区)</h4>
         `;
 
         // 显示默认分区列表
@@ -448,7 +471,9 @@
         });
 
         html += `
+                </div>
             </div>
+
             <div class="bili-classifier-footer">
                 <button class="bili-classifier-btn secondary" id="cancelClassify">取消</button>
                 <button class="bili-classifier-btn" id="startClassify">开始分类</button>
@@ -494,29 +519,38 @@
 
             document.getElementById('customGroups').appendChild(groupDiv);
 
-            // 绑定使用现有收藏夹事件
-            groupDiv.querySelector('.use-existing').onclick = (e) => {
-                const button = e.target;
-                const select = document.createElement('select');
-                select.className = 'bili-classifier-select';
-                select.innerHTML = `<option value="">选择现有收藏夹</option>${existingFolders.map(f => `<option value="${f.id}">${f.title}</option>`).join('')}`;
+            // 绑定使用现有收藏夹事件 - 改进版
+            const bindToggleEvent = (button) => {
+                button.onclick = (e) => {
+                    const group = button.closest('.custom-group');
+                    const input = group.querySelector('.folder-name');
+                    const select = group.querySelector('select');
 
-                const input = groupDiv.querySelector('.folder-name');
-                if (input) {
-                    input.parentNode.replaceChild(select, input);
-                    button.textContent = '创建新收藏夹';
-                    button.onclick = (e) => {
-                         const selectEl = groupDiv.querySelector('select');
-                         const newEl = document.createElement('input');
-                         newEl.type = 'text';
-                         newEl.className = 'bili-classifier-input folder-name';
-                         newEl.placeholder = '新收藏夹名称';
-                         selectEl.parentNode.replaceChild(newEl, selectEl);
-                         e.target.textContent = '使用现有收藏夹';
-                         e.target.onclick = () => groupDiv.querySelector('.use-existing').onclick(e); // 重新绑定事件
+                    if (input) {
+                        // 从输入框切换到下拉选择
+                        const newSelect = document.createElement('select');
+                        newSelect.className = 'bili-classifier-select';
+                        newSelect.innerHTML = `<option value="">选择现有收藏夹</option>${existingFolders.map(f => `<option value="${f.id}">${f.title}</option>`).join('')}`;
+
+                        input.parentNode.replaceChild(newSelect, input);
+                        button.textContent = '创建新收藏夹';
+                        bindToggleEvent(button); // 重新绑定事件
+                    } else if (select) {
+                        // 从下拉选择切换到输入框
+                        const newInput = document.createElement('input');
+                        newInput.type = 'text';
+                        newInput.className = 'bili-classifier-input folder-name';
+                        newInput.placeholder = '新收藏夹名称';
+
+                        select.parentNode.replaceChild(newInput, select);
+                        button.textContent = '使用现有收藏夹';
+                        bindToggleEvent(button); // 重新绑定事件
                     }
-                }
+                };
             };
+
+            // 初始绑定事件
+            bindToggleEvent(groupDiv.querySelector('.use-existing'));
 
             // 绑定删除事件
             groupDiv.querySelector('.remove-group').onclick = () => {
@@ -649,12 +683,14 @@
 
                 // 获取或创建目标收藏夹
                 if (!group.isExisting) {
-                    const existingFolders = await getUserFavLists();
-                    let counter = 1;
-                    while (existingFolders.some(f => f.title === folderNameToUse)) {
-                        folderNameToUse = `${group.name}_${counter++}`;
+                    // 检查是否存在同名收藏夹
+                    const existingId = await findExistingFolderId(folderNameToUse);
+                    if (existingId) {
+                        targetFid = existingId;
+                    } else {
+                        // 不存在则创建新的
+                        targetFid = await createFolder(folderNameToUse);
                     }
-                    targetFid = await createFolder(folderNameToUse);
                     await new Promise(r => setTimeout(r, 500)); // 创建后稍等
                 }
 
