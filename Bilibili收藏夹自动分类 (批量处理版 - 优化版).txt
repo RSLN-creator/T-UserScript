@@ -321,8 +321,10 @@
             return data;
         },
 
-        /** 获取收藏夹视频列表（逐页并获取视频信息） */
-        async getFavVideos(mediaId, ps = CONFIG.BATCH_SIZE, pn = 1, videos = []) {
+        /** 获取收藏夹视频列表（逐页并获取视频信息） 
+         *  新增 progressCb 参数：每处理完一个视频会调用 progressCb(currentCount)
+         */
+        async getFavVideos(mediaId, ps = CONFIG.BATCH_SIZE, pn = 1, videos = [], progressCb = null) {
             const response = await utils.apiRequest({
                 method: 'GET',
                 url: `https://api.bilibili.com/x/v3/fav/resource/list?media_id=${mediaId}&pn=${pn}&ps=${ps}&order=mtime&type=0&platform=web`,
@@ -352,11 +354,19 @@
                 } catch (error) {
                     utils.log(`跳过视频 ${video.id || '未知'}: ${error.message}`, 'warning');
                 }
+
+                // 每获取一个有效/跳过一个后通知进度回调（count = 当前已收集的视频数）
+                try {
+                    if (typeof progressCb === 'function') progressCb(videos.length);
+                } catch (e) {
+                    /* 忽略回调错误 */
+                }
+
                 await utils.delay(CONFIG.INFO_FETCH_DELAY);
             }
 
             if (data.has_more) {
-                return await apiService.getFavVideos(mediaId, ps, pn + 1, videos);
+                return await apiService.getFavVideos(mediaId, ps, pn + 1, videos, progressCb);
             }
 
             return videos;
@@ -760,9 +770,15 @@
 
         /** 获取视频数据并显示进度 */
         async getVideosWithProgress() {
-            uiManager.createProgressDiv('reading-progress', '正在读取视频...');
+            // 初始化读取进度卡片，显示已获取数量（total 未知，写为 ?）
+            uiManager.createProgressDiv('reading-progress', `正在读取视频 · 已获取 0 个视频`);
+
             try {
-                const videos = await apiService.getFavVideos(this.sourceFid);
+                // 传入 progress 回调，每获取一个视频更新已获取数量显示
+                const videos = await apiService.getFavVideos(this.sourceFid, CONFIG.BATCH_SIZE, 1, [], (count) => {
+                    uiManager.updateProgress('reading-progress', `正在读取视频 · 已获取 ${count} 个视频`, count, 0);
+                });
+
                 uiManager.removeProgress('reading-progress');
                 return videos;
             } catch (error) {
