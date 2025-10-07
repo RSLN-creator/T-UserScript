@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         Bilibili收藏夹自动分类 (批量处理版 - 优化版)
+// @name         Bilibili收藏夹自动分类 (批量处理版 - 优化版)2.3
 // @namespace    http://tampermonkey.net/
-// @version      2.2
+// @version      2.3
 // @description  B站收藏夹视频自动分类，采用批量API，高效稳定，优化速率限制和进度显示，!!!原脚本来源于 https://github.com/jqwgt
 // @author       RSYHN         https://space.bilibili.com/484456494?spm_id_from=333.1007.0.0
 // @license      GPL-3.0-or-later
@@ -15,7 +15,7 @@
 (function() {
     'use strict';
 
-    // --- 样式部分 (已包含按钮样式) ---
+    // --- 样式部分 ---
     GM_addStyle(`
         .bili-classifier-container {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -46,15 +46,19 @@
             padding-bottom: 10px;
         }
         .bili-classifier-btn {
-            padding: 10px 16px;
+            padding: 8px 14px;
             background: #00a1d6;
             color: white;
             border: none;
             border-radius: 6px;
             cursor: pointer;
-            font-size: 14px;
+            font-size: 13px;
             transition: all 0.2s;
-            margin-right: 10px;
+            margin-right: 8px;
+            height: 34px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
         }
         .bili-classifier-btn:hover {
             background: #0087b4;
@@ -118,7 +122,7 @@
             justify-content: flex-end;
             padding-top: 15px;
             border-top: 1px solid #eee;
-            margin-top: auto; /* 固定到底部 */
+            margin-top: auto;
         }
         .bili-classifier-progress {
             position: fixed;
@@ -158,9 +162,10 @@
             display: flex;
             gap: 10px;
             margin-top: 20px;
+            justify-content: flex-end;
         }
         .bili-classifier-link-btn {
-            padding: 8px 12px;
+            padding: 6px 10px;
             background: #f0f0f0;
             color: #666;
             border-radius: 4px;
@@ -169,6 +174,7 @@
             display: flex;
             align-items: center;
             gap: 5px;
+            height: 28px;
         }
         .bili-classifier-link-btn:hover {
             background: #e0e0e0;
@@ -190,30 +196,30 @@
             border: 1px solid #eee;
             border-radius: 8px;
         }
-        /* 内容区域，确保footer可以固定到底部 */
         .bili-classifier-content {
             flex: 1;
             overflow-y: auto;
+        }
+        .bili-classifier-footer-buttons {
+            display: flex;
+            gap: 10px;
+            align-items: center;
         }
     `);
 
     // --- 全局状态和辅助函数 ---
 
-    // 关键延迟时间（毫秒）
-    const RATE_LIMIT_DELAY = 2000; // 批量处理后的强制延迟
-    const INFO_FETCH_DELAY = 300;  // 获取单个视频信息后的延迟
+    const RATE_LIMIT_DELAY = 300;
+    const INFO_FETCH_DELAY = 300;
 
-    // 进度跟踪变量 (解决作用域问题)
     let totalVideos = 0;
     let totalProcessed = 0;
     let skippedVideos = 0;
 
-    // 获取CSRF令牌
     function getCsrf() {
         return document.cookie.match(/bili_jct=([^;]+)/)?.[1] || '';
     }
 
-    // 添加日志功能
     function log(message, type = 'info') {
         const styles = {
             info: 'color: #00a1d6',
@@ -223,7 +229,6 @@
         console.log(`%c[收藏夹分类] ${message}`, styles[type]);
     }
 
-    // 获取用户收藏夹
     async function getUserFavLists() {
         const mid = window.location.pathname.split('/')[1];
         return new Promise((resolve, reject) => {
@@ -232,21 +237,26 @@
                 url: `https://api.bilibili.com/x/v3/fav/folder/created/list-all?up_mid=${mid}`,
                 responseType: 'json',
                 onload: function(response) {
-                    resolve(response.response.data?.list || []);
+                    if (response.status === 200 && response.response && response.response.data) {
+                        resolve(response.response.data?.list || []);
+                    } else {
+                        reject(new Error(`获取收藏夹列表失败: ${response.status}`));
+                    }
                 },
-                onerror: reject
+                onerror: function(error) {
+                    reject(new Error(`网络错误: ${error.statusText}`));
+                }
             });
         });
     }
 
-    // 查找现有收藏夹ID（按名称精确匹配）
+    // 精确匹配收藏夹名称
     async function findExistingFolderId(folderName) {
         const folders = await getUserFavLists();
         const folder = folders.find(f => f.title.trim() === folderName.trim());
         return folder ? folder.id : null;
     }
 
-    // 获取视频详细信息 (精简日志)
     async function getVideoInfo(aid) {
         return new Promise((resolve, reject) => {
             GM_xmlhttpRequest({
@@ -254,45 +264,56 @@
                 url: `https://api.bilibili.com/x/web-interface/view?aid=${aid}`,
                 responseType: 'json',
                 onload: function(response) {
-                    if (response.response.code !== 0 || !response.response.data) {
-                        log(`视频 ${aid} 可能已失效或无法访问，跳过`, 'error');
-                        reject(new Error(`视频 ${aid} 无法访问`));
-                        return;
+                    if (response.status === 200 && response.response && response.response.data) {
+                        const data = response.response.data;
+                        log(`获取视频 ${aid} 详细信息:`, 'info');
+                        console.table({
+                            标题: data.title,
+                            分区ID: data.tid,
+                            分区名: data.tname,
+                            播放量: data.stat.view,
+                        });
+                        resolve(data);
+                    } else {
+                        const errorMsg = response.response ? response.response.message : '视频信息获取失败';
+                        log(`视频 ${aid} 可能已失效或无法访问: ${errorMsg}`, 'error');
+                        reject(new Error(`视频 ${aid} 可能已失效或无法访问: ${errorMsg}`));
                     }
-                    const data = response.response.data;
-                    log(`获取视频 ${aid} 详情: ${data.title}`, 'info');
-                    resolve(data);
                 },
                 onerror: function(error) {
-                    log(`视频 ${aid} 信息获取失败，跳过`, 'error');
-                    reject(error);
+                    log(`视频 ${aid} 信息获取失败，跳过处理`, 'error');
+                    reject(new Error(`网络错误: ${error.statusText}`));
                 }
             });
         });
     }
 
-    // 获取收藏夹中的视频 (增强进度跟踪)
     async function getFavVideos(mediaId, ps = 20, pn = 1, videos = []) {
-        if (!document.getElementById('reading-progress')) createReadingProgressDiv();
-
+        if (!document.getElementById('reading-progress')) {
+            createReadingProgressDiv();
+        }
         return new Promise((resolve, reject) => {
             GM_xmlhttpRequest({
                 method: 'GET',
                 url: `https://api.bilibili.com/x/v3/fav/resource/list?media_id=${mediaId}&pn=${pn}&ps=${ps}&order=mtime&type=0&platform=web`,
                 responseType: 'json',
                 onload: async function(response) {
+                    if (response.status !== 200 || !response.response || !response.response.data) {
+                        reject(new Error(`获取视频列表失败: ${response.status}`));
+                        return;
+                    }
+
                     const data = response.response.data;
 
-                    if (!data || !data.medias) {
-                        document.getElementById('reading-progress')?.remove();
+                    if (!data.medias) {
                         reject('获取视频列表失败');
                         return;
                     }
 
-                    let processedPageCount = 0;
-                    const totalEstimate = data.info?.media_count || (pn * ps) + data.medias.length;
+                    let currentCount = videos.length;
+                    let processedCount = 0;
 
-                    for (const video of data.medias) {
+                    for (let video of data.medias) {
                         try {
                             const videoInfo = await getVideoInfo(video.id);
                             videos.push({
@@ -302,13 +323,13 @@
                                 tname: videoInfo.tname,
                                 play: videoInfo.stat.view
                             });
+                            currentCount++;
                         } catch (err) {
-                            // 视频信息获取失败，跳过，不计入 videos 数组
+                            log(`跳过视频 ${video.id}: ${err.message}`, 'error');
                         } finally {
-                            processedPageCount++;
-                            // 实时更新读取进度
-                            updateReadingProgress(`正在读取视频，已获取 ${videos.length} 个。当前页处理进度 ${processedPageCount}/${data.medias.length}`, videos.length, totalEstimate);
-                            await new Promise(r => setTimeout(r, INFO_FETCH_DELAY)); // 保持获取单个详情的延迟
+                            processedCount++;
+                            updateReadingProgress(`正在读取视频，已获取 ${currentCount} 个视频，处理进度 ${processedCount}/${data.medias.length}`);
+                            await new Promise(r => setTimeout(r, 300));
                         }
                     }
 
@@ -319,21 +340,15 @@
                         resolve(videos);
                     }
                 },
-                onerror: reject
+                onerror: function(error) {
+                    reject(new Error(`网络错误: ${error.statusText}`));
+                }
             });
         });
     }
 
     // 创建新收藏夹
     async function createFolder(title) {
-        // 先检查是否已有同名收藏夹
-        const existingId = await findExistingFolderId(title);
-        if (existingId) {
-            log(`已存在同名收藏夹 "${title}"，将使用现有收藏夹`, 'info');
-            return existingId;
-        }
-
-        // 如果不存在则创建新的
         return new Promise((resolve, reject) => {
             GM_xmlhttpRequest({
                 method: 'POST',
@@ -345,85 +360,100 @@
                 responseType: 'json',
                 onload: function(response) {
                     if (response.response && response.response.code === 0) {
-                        log(`成功创建收藏夹: ${title}`, 'success');
                         resolve(response.response.data.id);
                     } else {
-                        reject(new Error(response.response.message || '创建收藏夹失败'));
+                        const errorMsg = response.response ? response.response.message : '创建收藏夹失败';
+                        reject(new Error(errorMsg));
                     }
                 },
-                onerror: reject
+                onerror: function(error) {
+                    reject(new Error(`网络错误: ${error.statusText}`));
+                }
             });
         });
     }
 
-    // 批量处理函数 (移动或复制)
-    async function batchDealFav(aids, targetFid, sourceFid = null) {
-        // aids: 需要移动/复制的视频ID数组, targetFid: 目标收藏夹ID, sourceFid: 源收藏夹ID (移动时需要)
-        const resources = aids.map(aid => `${aid}:2`).join(',');
-
-        let data = `csrf=${getCsrf()}&rid=0&type=2&add_media_ids=${targetFid}&resources=${resources}&jsonp=jsonp`;
-
-        if (sourceFid) {
-            data += `&del_media_ids=${sourceFid}`; // 移动操作
-        }
-
+    // 添加视频到收藏夹
+    async function addToFav(aid, fid) {
         return new Promise((resolve, reject) => {
             GM_xmlhttpRequest({
                 method: 'POST',
-                url: 'https://api.bilibili.com/x/v3/fav/resource/batch-deal',
+                url: 'https://api.bilibili.com/x/v3/fav/resource/deal',
                 headers: {
                     'Content-Type': 'application/x-www-form-urlencoded'
                 },
-                data: data,
+                data: `csrf=${getCsrf()}&rid=${aid}&type=2&add_media_ids=${fid}&jsonp=jsonp`,
                 responseType: 'json',
                 onload: function(response) {
                     if (response.response && response.response.code === 0) {
                         resolve(response.response);
                     } else {
-                        // 错误码 -101 (未登录) / 错误码 -400 (请求错误)
-                        reject(new Error(response.response.message || `批量处理失败，Code: ${response.response.code}`));
+                        const errorMsg = response.response ? response.response.message : '添加视频失败';
+                        reject(new Error(errorMsg));
                     }
                 },
-                onerror: reject
+                onerror: function(error) {
+                    reject(new Error(`网络错误: ${error.statusText}`));
+                }
+            });
+        });
+    }
+
+    // 从收藏夹移除视频
+    async function removeFromFav(aid, fid) {
+        return new Promise((resolve, reject) => {
+            GM_xmlhttpRequest({
+                method: 'POST',
+                url: 'https://api.bilibili.com/x/v3/fav/resource/deal',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded'
+                },
+                data: `csrf=${getCsrf()}&rid=${aid}&type=2&del_media_ids=${fid}&jsonp=jsonp`,
+                responseType: 'json',
+                onload: function(response) {
+                    if (response.response && response.response.code === 0) {
+                        resolve(response.response);
+                    } else {
+                        const errorMsg = response.response ? response.response.message : '移除视频失败';
+                        reject(new Error(errorMsg));
+                    }
+                },
+                onerror: function(error) {
+                    reject(new Error(`网络错误: ${error.statusText}`));
+                }
             });
         });
     }
 
     // --- 界面和进度条函数 ---
-
-    // 创建和更新读取视频进度显示
     function createReadingProgressDiv() {
         const div = document.createElement('div');
         div.id = 'reading-progress';
         div.className = 'bili-classifier-progress';
-        div.innerHTML = `<div>正在读取视频...</div><div class="bili-classifier-progress-bar"><div class="bili-classifier-progress-fill" style="width: 0%"></div></div><div id="reading-counts">0/0</div>`;
+        div.innerHTML = `<div>正在读取视频...</div><div class="bili-classifier-progress-bar"><div class="bili-classifier-progress-fill" style="width: 0%"></div></div>`;
         document.body.appendChild(div);
         return div;
     }
 
-    function updateReadingProgress(message, currentCount, totalEstimate) {
+    function updateReadingProgress(message) {
         const progressDiv = document.getElementById('reading-progress') || createReadingProgressDiv();
         progressDiv.querySelector('div:first-child').textContent = message;
-        progressDiv.querySelector('.bili-classifier-progress-fill').style.width = `${(currentCount/totalEstimate)*100}%`;
-        progressDiv.querySelector('#reading-counts').textContent = `${currentCount}/${totalEstimate}`;
     }
 
-    // 创建和更新处理进度 (使用全局变量)
     function createProgressDiv() {
         const div = document.createElement('div');
         div.id = 'fav-progress';
         div.className = 'bili-classifier-progress';
-        div.innerHTML = `<div>正在处理...</div><div class="bili-classifier-progress-bar"><div class="bili-classifier-progress-fill" style="width: 0%"></div></div><div id="progress-counts">0/0</div>`;
+        div.innerHTML = `<div>正在处理...</div><div class="bili-classifier-progress-bar"><div class="bili-classifier-progress-fill" style="width: 0%"></div></div><div>0/0</div>`;
         document.body.appendChild(div);
         return div;
     }
 
-    // 解决 totalProcessed is not defined 的关键：使用外部定义的全局变量
-    function updateProgress(message) {
+    function updateProgress(message, current, total, skipped = 0) {
         const progressDiv = document.getElementById('fav-progress') || createProgressDiv();
         progressDiv.querySelector('div:first-child').textContent = message;
-        progressDiv.querySelector('.bili-classifier-progress-fill').style.width = `${(totalProcessed/totalVideos)*100}%`;
-        progressDiv.querySelector('#progress-counts').textContent = `${totalProcessed}/${totalVideos}${skippedVideos > 0 ? ` (跳过${skippedVideos}个)` : ''}`;
+        progressDiv.querySelector('.bili-classifier-progress-fill').style.width = `${(current/total)*100}%`;
+        progressDiv.querySelector('div:last-child').textContent = `${current}/${total}${skipped > 0 ? ` (跳过${skipped}个)` : ''}`;
     }
 
     // 创建配置界面
@@ -459,7 +489,6 @@
                     <h4>视频分区列表 (${Object.keys(tidGroups).length}个分区)</h4>
         `;
 
-        // 显示默认分区列表
         Object.entries(tidGroups).forEach(([tid, videos]) => {
             html += `
                 <div class="bili-classifier-group tid-group" data-tid="${tid}">
@@ -475,13 +504,14 @@
             </div>
 
             <div class="bili-classifier-footer">
-                <button class="bili-classifier-btn secondary" id="cancelClassify">取消</button>
-                <button class="bili-classifier-btn" id="startClassify">开始分类</button>
-            </div>
-
-            <div class="bili-classifier-links">
-                <a href="https://space.bilibili.com/484456494?spm_id_from=333.1007.0.0" target="_blank" class="bili-classifier-link-btn">我的B站主页</a>
-                <a href="https://github.com/RSLN-creator/T-UserScript" target="_blank" class="bili-classifier-link-btn">GitHub项目</a>
+                <div class="bili-classifier-links">
+                    <a href="https://space.bilibili.com/484456494?spm_id_from=333.1007.0.0" target="_blank" class="bili-classifier-link-btn">我的B站主页</a>
+                    <a href="https://github.com/RSLN-creator/T-UserScript" target="_blank" class="bili-classifier-link-btn">GitHub项目</a>
+                </div>
+                <div class="bili-classifier-footer-buttons">
+                    <button class="bili-classifier-btn secondary" id="cancelClassify">取消</button>
+                    <button class="bili-classifier-btn" id="startClassify">开始分类</button>
+                </div>
             </div>
         `;
 
@@ -491,6 +521,8 @@
         let existingFolders = [];
         getUserFavLists().then(folders => {
             existingFolders = folders;
+        }).catch(err => {
+            console.error('获取收藏夹列表失败:', err);
         });
 
         // 绑定添加自定义分组事件
@@ -519,7 +551,7 @@
 
             document.getElementById('customGroups').appendChild(groupDiv);
 
-            // 绑定使用现有收藏夹事件 - 改进版
+            // 绑定使用现有收藏夹事件
             const bindToggleEvent = (button) => {
                 button.onclick = (e) => {
                     const group = button.closest('.custom-group');
@@ -527,16 +559,14 @@
                     const select = group.querySelector('select');
 
                     if (input) {
-                        // 从输入框切换到下拉选择
                         const newSelect = document.createElement('select');
                         newSelect.className = 'bili-classifier-select';
                         newSelect.innerHTML = `<option value="">选择现有收藏夹</option>${existingFolders.map(f => `<option value="${f.id}">${f.title}</option>`).join('')}`;
 
                         input.parentNode.replaceChild(newSelect, input);
                         button.textContent = '创建新收藏夹';
-                        bindToggleEvent(button); // 重新绑定事件
+                        bindToggleEvent(button);
                     } else if (select) {
-                        // 从下拉选择切换到输入框
                         const newInput = document.createElement('input');
                         newInput.type = 'text';
                         newInput.className = 'bili-classifier-input folder-name';
@@ -544,12 +574,11 @@
 
                         select.parentNode.replaceChild(newInput, select);
                         button.textContent = '使用现有收藏夹';
-                        bindToggleEvent(button); // 重新绑定事件
+                        bindToggleEvent(button);
                     }
                 };
             };
 
-            // 初始绑定事件
             bindToggleEvent(groupDiv.querySelector('.use-existing'));
 
             // 绑定删除事件
@@ -557,7 +586,6 @@
                 groupDiv.remove();
             };
         };
-
 
         return new Promise((resolve, reject) => {
             // 绑定开始分类事件
@@ -586,7 +614,6 @@
                 // 准备自动分区列表
                 if (config.autoClassifyUnassigned) {
                     Object.keys(tidGroups).forEach(tid => {
-                        // 只有未被任何自定义分组包含的分区才进行自动创建
                         if (!config.custom.some(g => g.tids.includes(tid))) {
                             config.default[tid] = tidGroups[tid][0].tname;
                         }
@@ -604,12 +631,11 @@
         });
     }
 
-    // --- 主处理流程 (已优化) ---
+    // --- 主处理流程 ---
     async function processClassify() {
-        // 重置全局进度状态
-        totalProcessed = 0;
-        totalVideos = 0;
-        skippedVideos = 0;
+        let totalProcessed = 0;
+        let totalVideos = 0;
+        let skippedVideos = 0;
         const sourceFid = new URL(location.href).searchParams.get('fid');
 
         try {
@@ -632,88 +658,102 @@
             log(`步骤 2/3: 获取完成，共找到 ${totalVideos} 个有效视频。`);
             const userConfig = await createConfigUI(tidGroups);
 
-            const isMoveMode = userConfig.operationMode === 'move';
+            log('步骤 3/3: 开始执行分类操作...');
+            updateProgress(`正在准备分组和创建收藏夹...`, 0, totalVideos);
 
-            log('步骤 3/3: 开始执行分类操作 (批量处理模式)...');
-            updateProgress(`正在准备分组和创建收藏夹...`);
-
-            // 统一处理所有分组（自定义和默认）
-            const allGroups = [];
-            let unassignedAids = new Set(videos.map(v => v.aid));
-
-            // 1. 添加自定义分组
+            // 处理自定义分组
             for (const group of userConfig.custom) {
-                const aidsToProcess = [];
-                for (const tid of group.tids) {
-                    if (tidGroups[tid]) {
-                         tidGroups[tid].forEach(video => {
-                             if(unassignedAids.has(video.aid)) {
-                                 aidsToProcess.push(video.aid);
-                                 // 从未分配集合中移除
-                                 unassignedAids.delete(video.aid);
-                             }
-                         });
-                    }
-                }
-                if (aidsToProcess.length > 0) {
-                    allGroups.push({ name: group.name, aids: aidsToProcess, isExisting: group.isExisting, fid: group.fid });
-                }
-            }
-
-            // 2. 添加默认分区自动分组 (只处理剩下的未分配视频)
-            if (userConfig.autoClassifyUnassigned) {
-                for (const [tid, folderName] of Object.entries(userConfig.default)) {
-                    // 检查该分区是否还有未被自定义分组处理的视频
-                    const aidsToProcess = tidGroups[tid]
-                        .map(video => video.aid)
-                        .filter(aid => unassignedAids.has(aid));
-
-                    if (aidsToProcess.length > 0) {
-                        allGroups.push({ name: folderName, aids: aidsToProcess, isExisting: false, fid: null });
-                        // 从未分配集合中移除
-                        aidsToProcess.forEach(aid => unassignedAids.delete(aid));
-                    }
-                }
-            }
-
-            // 3. 顺序执行所有分组处理 (避免速率限制)
-            for (const group of allGroups) {
-                let targetFid = group.fid;
+                let targetFid;
                 let folderNameToUse = group.name;
 
                 // 获取或创建目标收藏夹
-                if (!group.isExisting) {
-                    // 检查是否存在同名收藏夹
-                    const existingId = await findExistingFolderId(folderNameToUse);
-                    if (existingId) {
-                        targetFid = existingId;
+                if (group.isExisting) {
+                    targetFid = group.fid;
+                    log(`使用现有收藏夹: "${folderNameToUse}" (ID: ${targetFid})`, 'info');
+                } else {
+                    // 检查收藏夹名称是否存在（精确匹配）
+                    const existingFolderId = await findExistingFolderId(folderNameToUse);
+                    if (existingFolderId) {
+                        // 使用现有收藏夹
+                        targetFid = existingFolderId;
+                        log(`发现同名收藏夹，使用现有收藏夹: "${folderNameToUse}" (ID: ${targetFid})`, 'info');
                     } else {
-                        // 不存在则创建新的
+                        // 创建新收藏夹
                         targetFid = await createFolder(folderNameToUse);
+                        log(`创建新收藏夹: "${folderNameToUse}" (ID: ${targetFid})`, 'success');
+                        await new Promise(r => setTimeout(r, 500));
                     }
-                    await new Promise(r => setTimeout(r, 500)); // 创建后稍等
                 }
 
-                // 批量处理
-                updateProgress(`正在将 ${group.aids.length} 个视频处理到分组 "${folderNameToUse}"`);
-
-                try {
-                    await batchDealFav(group.aids, targetFid, isMoveMode ? sourceFid : null);
-                    totalProcessed += group.aids.length;
-                    log(`成功处理 ${group.aids.length} 个视频到 "${folderNameToUse}"`, 'success');
-                } catch (error) {
-                    skippedVideos += group.aids.length;
-                    log(`处理到 "${folderNameToUse}" 的一批视频失败: ${error.message}，已全部跳过`, 'error');
+                // 添加选中分区的视频
+                for (const tid of group.tids) {
+                    if (tidGroups[tid]) {
+                        for (const video of tidGroups[tid]) {
+                            try {
+                                await addToFav(video.aid, targetFid);
+                                if (userConfig.operationMode === 'move') {
+                                    await removeFromFav(video.aid, sourceFid);
+                                }
+                                totalProcessed++;
+                                log(`成功处理视频 ${video.aid} 到 "${folderNameToUse}"`, 'success');
+                            } catch (error) {
+                                log(`处理视频 ${video.aid} 失败: ${error.message}，已跳过`, 'error');
+                                skippedVideos++;
+                            }
+                            updateProgress(`正在处理视频到分组"${folderNameToUse}"`, totalProcessed, totalVideos, skippedVideos);
+                            await new Promise(r => setTimeout(r, RATE_LIMIT_DELAY));
+                        }
+                    }
                 }
+            }
 
-                updateProgress(`已处理 ${totalProcessed} / ${totalVideos}`);
-                await new Promise(r => setTimeout(r, RATE_LIMIT_DELAY)); // **关键优化：强制延迟 2 秒**
+            // 处理未分组的视频
+            if (userConfig.autoClassifyUnassigned) {
+                for (const [tid, folderName] of Object.entries(userConfig.default)) {
+                    let targetFid;
+                    let folderNameToUse = folderName;
+
+                    // 精确匹配现有收藏夹
+                    const existingFolderId = await findExistingFolderId(folderNameToUse);
+                    if (existingFolderId) {
+                        // 使用现有收藏夹
+                        targetFid = existingFolderId;
+                        log(`发现同名收藏夹，使用现有收藏夹: "${folderNameToUse}" (ID: ${targetFid})`, 'info');
+                    } else {
+                        // 创建新收藏夹
+                        targetFid = await createFolder(folderNameToUse);
+                        log(`创建新收藏夹: "${folderNameToUse}" (ID: ${targetFid})`, 'success');
+                    }
+
+                    if (tidGroups[tid]) {
+                        for (const video of tidGroups[tid]) {
+                            try {
+                                await addToFav(video.aid, targetFid);
+                                if (userConfig.operationMode === 'move') {
+                                    await removeFromFav(video.aid, sourceFid);
+                                }
+                                totalProcessed++;
+                                log(`成功处理视频 ${video.aid} 到 "${folderNameToUse}"`, 'success');
+                            } catch (error) {
+                                log(`处理视频 ${video.aid} 失败: ${error.message}，已跳过`, 'error');
+                                skippedVideos++;
+                            }
+                            updateProgress(`正在处理视频到"${folderNameToUse}"`, totalProcessed, totalVideos, skippedVideos);
+                            await new Promise(r => setTimeout(r, RATE_LIMIT_DELAY));
+                        }
+                    }
+                }
             }
 
             document.getElementById('fav-progress')?.remove();
-            log(`操作完成！成功处理 ${totalProcessed} 个视频，跳过 ${skippedVideos} 个`, 'success');
-            alert(`分类完成！成功处理了 ${totalProcessed} 个视频，跳过了 ${skippedVideos} 个视频。\n（请刷新页面查看新收藏夹）`);
-            if (isMoveMode) window.location.reload();
+            log(`分类完成！处理了 ${totalProcessed} 个视频，跳过了 ${skippedVideos} 个视频`, 'success');
+            alert(`分类完成！处理了 ${totalProcessed} 个视频，跳过了 ${skippedVideos} 个视频`);
+
+            if (userConfig.operationMode === 'move') {
+                setTimeout(() => {
+                    window.location.reload();
+                }, 1000);
+            }
 
         } catch (error) {
             log(`操作失败: ${error.message}`, 'error');
@@ -723,7 +763,7 @@
         }
     }
 
-    // 添加触发按钮和链接 (已恢复)
+    // 添加触发按钮和链接
     function addButton() {
         const btnContainer = document.createElement('div');
         btnContainer.className = 'bili-classifier-float-btn';
@@ -733,7 +773,6 @@
         btn.textContent = '按分区分类';
         btn.onclick = processClassify;
 
-        // 按钮链接部分 (链接已更新)
         const links = document.createElement('div');
         links.className = 'bili-classifier-links';
         links.innerHTML = `
