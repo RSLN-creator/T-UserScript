@@ -902,10 +902,16 @@
         /** 显示完成消息 */
         showCompletionMessage() {
             utils.log(`分类完成！处理了 ${this.totalProcessed} 个视频，跳过了 ${this.skippedVideos} 个视频`, 'success');
-            alert(`分类完成！处理了 ${this.totalProcessed} 个视频，跳过了 ${this.skippedVideos} 个视频`);
-
-            if (document.querySelector('input[name="operationMode"]:checked')?.value === 'move') {
-                setTimeout(() => location.reload(), 1000);
+            const msg = `分类完成！处理了 ${this.totalProcessed} 个视频，跳过了 ${this.skippedVideos} 个视频`;
+            alert(msg);
+            // alert 返回后（用户点击确认），如果为移动模式则刷新页面以更新原收藏夹显示
+            try {
+                const op = document.querySelector('input[name="operationMode"]:checked')?.value;
+                if (op === 'move') {
+                    location.reload();
+                }
+            } catch (e) {
+                /* 忽略刷新异常 */
             }
         }
 
