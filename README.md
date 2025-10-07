@@ -1,2 +1,2 @@
 # T-UserScript
-Private Useful UserScript
+Personal Useful UserScript
