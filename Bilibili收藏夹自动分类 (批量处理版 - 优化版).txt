@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Bilibili收藏夹自动分类 (批量处理版 - 优化版)2.4
+// @name         Bilibili收藏夹自动分类 加入玻璃效果调整
 // @namespace    http://tampermonkey.net/
-// @version      2.4
-// @description  B站收藏夹视频自动分类，采用批量API，高效稳定，优化速率限制和进度显示
+// @version      3.3.2
+// @description  B站收藏夹视频自动分类，统一玻璃美学设计
 // @author       RSYHN
 // @license      GPL-3.0-or-later
 // @match        *://space.bilibili.com/*/favlist*
@@ -15,28 +15,95 @@
 (function() {
     'use strict';
 
-    // 配置常量
+    /**
+     * @file Bilibili Favorites Auto-Classifier
+     * @author RSYHN
+     * This script provides functionality to automatically classify videos in a Bilibili favorites folder
+     * based on their official video partitions. It features a configurable glassmorphism UI,
+     * allowing users to move or copy videos into new or existing folders.
+     */
+
+    // --- Configuration Constants ---
+
+    /**
+     * Global configuration for API requests and processing.
+     * @property {number} RATE_LIMIT_DELAY - Delay in milliseconds between write operations (add/remove video).
+     * @property {number} INFO_FETCH_DELAY - Delay in milliseconds between fetching video details.
+     * @property {number} BATCH_SIZE - Number of videos to fetch per API request to a favorites folder.
+     * @property {number} MAX_RETRY_ATTEMPTS - Maximum number of retry attempts for a failed API request.
+     */
     const CONFIG = {
         RATE_LIMIT_DELAY: 300,
         INFO_FETCH_DELAY: 300,
-        BATCH_SIZE: 20
+        BATCH_SIZE: 20,
+        MAX_RETRY_ATTEMPTS: 3
     };
 
-    // --- 样式部分 ---
+    // --- Unified Glass Style System ---
     GM_addStyle(`
-        .bili-classifier-container {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            color: #222;
+        :root {
+            --glass-bg: rgba(255, 255, 255, 0.08);
+            --glass-border: rgba(255, 255, 255, 0.12);
+            --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+            --glass-inset-light: inset 0 1px 0 rgba(255, 255, 255, 0.15);
+            --glass-inset-dark: inset 0 -1px 0 rgba(0, 0, 0, 0.1);
+            --text-primary: rgba(255, 255, 255, 0.95);
+            --text-secondary: rgba(255, 255, 255, 0.7);
+            --text-muted: rgba(255, 255, 255, 0.5);
+            --primary-color: #00a1d6;
+            --primary-gradient: linear-gradient(135deg, #00a1d6, #00c4ff);
+            --blur-intensity: 35px; /* 增强模糊效果 */
+            --saturation: 180%; /* 优化饱和度 */
+            --border-radius: 16px;
+            --transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            /* 新增透明度变量 */
+            --primary-opacity: 0.4;
+            --secondary-opacity: 0.1;
+            --danger-opacity: 0.4;
+            --glass-opacity: 0.05; /* 默认值从0.08改为0.05，更通透 */
+            --glass-border-opacity: 0.1; /* 新增边框透明度控制 */
         }
+        .bili-classifier-container {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+            color: var(--text-primary);
+        }
+        /* 统一玻璃基础样式 - 增强通透感 */
+        .bili-classifier-glass {
+            background: rgba(255, 255, 255, var(--glass-opacity)) !important;
+            backdrop-filter: blur(var(--blur-intensity)) saturate(var(--saturation));
+            -webkit-backdrop-filter: blur(var(--blur-intensity)) saturate(var(--saturation));
+            border: 1px solid rgba(255, 255, 255, var(--glass-border-opacity));
+            border-radius: var(--border-radius);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2),
+                       var(--glass-inset-light),
+                       var(--glass-inset-dark);
+        }
+        /* 卡片专用玻璃效果 - 更加通透 */
+        .bili-classifier-card {
+            background: rgba(255, 255, 255, calc(var(--glass-opacity) * 0.6)) !important;
+            backdrop-filter: blur(40px) saturate(160%);
+            -webkit-backdrop-filter: blur(40px) saturate(160%);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: var(--border-radius);
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08),
+                       inset 0 1px 0 rgba(255, 255, 255, 0.1),
+                       inset 0 -1px 0 rgba(0, 0, 0, 0.02);
+        }
+        /* 模态框 - 优化通透度 */
         .bili-classifier-modal {
             position: fixed;
             top: 50%;
             left: 50%;
             transform: translate(-50%, -50%);
-            background: white;
-            padding: 25px;
-            border-radius: 12px;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+            background: rgba(255, 255, 255, calc(var(--glass-opacity) * 1.2)) !important;
+            backdrop-filter: blur(50px) saturate(180%);
+            -webkit-backdrop-filter: blur(50px) saturate(180%);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            border-radius: var(--border-radius);
+            padding: 30px 25px 25px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.15),
+                       var(--glass-inset-light),
+                       var(--glass-inset-dark);
             z-index: 10000;
             max-height: 80vh;
             overflow-y: auto;
@@ -45,73 +112,170 @@
             display: flex;
             flex-direction: column;
         }
-        .bili-classifier-modal h3 {
-            margin-top: 0;
-            color: #00a1d6;
-            font-size: 1.5em;
-            border-bottom: 1px solid #eee;
-            padding-bottom: 10px;
+        /* 进度条 - 更加通透 */
+        .bili-classifier-progress {
+            position: fixed;
+            bottom: 30px;
+            right: 30px;
+            background: rgba(255, 255, 255, calc(var(--glass-opacity) * 0.8)) !important;
+            backdrop-filter: blur(35px) saturate(170%);
+            -webkit-backdrop-filter: blur(35px) saturate(170%);
+            padding: 15px 20px;
+            border-radius: 16px;
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            box-shadow: 0 8px 25px rgba(0, 0, 0, 0.12),
+                       var(--glass-inset-light);
+            z-index: 10000;
+            min-width: 250px;
+            color: var(--text-primary);
         }
+        /* 统一按钮系统 */
         .bili-classifier-btn {
-            padding: 6px 12px;
-            background: #00a1d6;
-            color: white;
-            border: none;
-            border-radius: 6px;
-            cursor: pointer;
+            padding: 8px 16px;
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            border-radius: var(--border-radius);
+            color: var(--text-primary);
             font-size: 13px;
-            transition: all 0.2s;
-            height: 32px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: var(--transition);
             display: flex;
             align-items: center;
             justify-content: center;
+            gap: 6px;
+            height: 32px;
+            min-width: auto;
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15), var(--glass-inset-light);
+            white-space: nowrap;
+            border: none;
+            outline: none;
         }
         .bili-classifier-btn:hover {
-            background: #0087b4;
+            background: rgba(255, 255, 255, 0.15);
+            border-color: rgba(255, 255, 255, 0.25);
+            transform: translateY(-1px);
+            box-shadow: 0 6px 24px rgba(0, 0, 0, 0.2), var(--glass-inset-light);
+        }
+        .bili-classifier-btn:active {
+            transform: translateY(0);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15), var(--glass-inset-light);
+        }
+        /* 主要按钮样式 - 使用动态变量 */
+        .bili-classifier-btn.primary {
+            background: linear-gradient(135deg,
+                rgba(var(--primary-rgb, 0, 161, 214), var(--primary-opacity)),
+                rgba(var(--primary-dark-rgb, 0, 140, 190), calc(var(--primary-opacity) - 0.1)));
+            border: 1px solid rgba(var(--primary-rgb, 0, 161, 214), 0.5);
+            box-shadow: 0 4px 20px rgba(var(--primary-rgb, 0, 161, 214), 0.3), var(--glass-inset-light);
+        }
+        .bili-classifier-btn.primary:hover {
+            background: linear-gradient(135deg,
+                rgba(var(--primary-rgb, 0, 161, 214), calc(var(--primary-opacity) + 0.1)),
+                rgba(var(--primary-dark-rgb, 0, 140, 190), var(--primary-opacity)));
+            border-color: rgba(var(--primary-rgb, 0, 161, 214), 0.7);
+            box-shadow: 0 6px 28px rgba(var(--primary-rgb, 0, 161, 214), 0.4), var(--glass-inset-light);
         }
         .bili-classifier-btn.secondary {
-            background: #f0f0f0;
-            color: #666;
-        }
-        .bili-classifier-btn.secondary:hover {
-            background: #e0e0e0;
+            background: rgba(var(--secondary-rgb, 255, 255, 255), var(--secondary-opacity));
+            border: 1px solid rgba(var(--secondary-rgb, 255, 255, 255), 0.2);
         }
         .bili-classifier-btn.danger {
-            background: #ff4d4f;
+            background: linear-gradient(135deg,
+                rgba(var(--danger-rgb, 255, 77, 79), var(--danger-opacity)),
+                rgba(var(--danger-dark-rgb, 220, 60, 60), calc(var(--danger-opacity) - 0.1)));
+            border: 1px solid rgba(var(--danger-rgb, 255, 77, 79), 0.5);
+            box-shadow: 0 4px 20px rgba(var(--danger-rgb, 255, 77, 79), 0.3), var(--glass-inset-light);
         }
         .bili-classifier-btn.danger:hover {
-            background: #ff7875;
+            background: linear-gradient(135deg,
+                rgba(var(--danger-rgb, 255, 77, 79), calc(var(--danger-opacity) + 0.1)),
+                rgba(var(--danger-dark-rgb, 220, 60, 60), var(--danger-opacity)));
+            border-color: rgba(var(--danger-rgb, 255, 77, 79), 0.7);
         }
+        .bili-classifier-btn.icon {
+            padding: 6px;
+            width: 32px;
+            height: 32px;
+            min-width: 32px;
+        }
+        .bili-classifier-btn.icon:hover {
+            transform: scale(1.05);
+        }
+        .bili-classifier-modal > h3:first-child {
+            font-size: 24px;
+            background: var(--primary-gradient);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin: 0 0 20px;
+            font-weight: 600;
+            line-height: 1.4;
+            padding: 8px 0 5px;
+            min-height: 40px;
+            display: flex;
+            align-items: center;
+        }
+        /* 主按钮区域 */
+        .bili-classifier-main-buttons {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            padding: 0;
+            background: transparent;
+            backdrop-filter: none;
+            border-radius: 16px;
+            border: none;
+            margin-bottom: 0;
+        }
+        /* 分组容器 - 使用变量控制透明度 */
         .bili-classifier-group {
             margin: 15px 0;
             padding: 15px;
-            border: 1px solid #eee;
-            border-radius: 8px;
-            background: #fafafa;
+            background: rgba(255, 255, 255, calc(var(--glass-opacity) * 0.625));
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 16px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.06),
+                       inset 0 1px 0 rgba(255, 255, 255, 0.08);
         }
-        .bili-classifier-group-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 10px;
-            gap: 10px;
-        }
-        .bili-classifier-input {
+        /* 输入框和选择框 */
+        .bili-classifier-input,
+        .bili-classifier-select {
             padding: 6px 12px;
-            border: 1px solid #ddd;
-            border-radius: 4px;
+            background: rgba(255, 255, 255, 0.12);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.18);
+            border-radius: 16px;
+            color: var(--text-primary);
+            font-size: 13px;
+            transition: var(--transition);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1),
+                       inset 0 1px 0 rgba(255, 255, 255, 0.05);
             width: 200px;
             height: 32px;
             box-sizing: border-box;
+            border: none;
+            outline: none;
         }
         .bili-classifier-select {
-            padding: 6px 12px;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            width: 220px;
-            height: 32px;
-            box-sizing: border-box;
+            color: var(--select-text-color, #000000); /* 使用新的专用变量，并提供一个黑色作为备用 */
         }
+        .bili-classifier-input:focus,
+        .bili-classifier-select:focus {
+            border-color: var(--primary-color);
+            box-shadow: 0 0 0 3px rgba(0, 161, 214, 0.2),
+                       0 2px 8px rgba(0, 0, 0, 0.1);
+            background: rgba(255, 255, 255, 0.15);
+        }
+        .bili-classifier-input::placeholder {
+            color: var(--text-muted);
+        }
+        /* 复选框组 */
         .bili-classifier-checkbox-group {
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
@@ -122,71 +286,39 @@
             display: flex;
             align-items: center;
             cursor: pointer;
+            padding: 8px 12px;
+            background: rgba(255, 255, 255, 0.06);
+            border-radius: 16px;
+            transition: var(--transition);
+            border: 1px solid transparent;
+            color: var(--text-primary);
+        }
+        .bili-classifier-checkbox-label:hover {
+            background: rgba(255, 255, 255, 0.1);
+            border-color: rgba(255, 255, 255, 0.1);
         }
         .bili-classifier-checkbox {
             margin-right: 8px;
+            accent-color: var(--primary-color);
         }
-        .bili-classifier-footer {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding-top: 15px;
-            border-top: 1px solid #eee;
-            margin-top: auto;
-        }
-        .bili-classifier-links {
-            display: flex;
-            gap: 10px;
-        }
-        .bili-classifier-float-links {
-            display: flex;
-            gap: 10px;
-        }
-        .bili-classifier-link-btn {
-            padding: 6px 12px;
-            background: #f0f0f0;
-            color: #666;
-            border-radius: 6px;
-            text-decoration: none;
-            font-size: 13px;
-            display: flex;
-            align-items: center;
-            gap: 5px;
-            height: 32px;
-        }
-        .bili-classifier-link-btn:hover {
-            background: #e0e0e0;
-        }
-        .bili-classifier-footer-buttons {
-            display: flex;
-            gap: 10px;
-            align-items: center;
-        }
-        .bili-classifier-progress {
-            position: fixed;
-            bottom: 30px;
-            right: 30px;
-            background: white;
-            padding: 15px 20px;
-            border-radius: 10px;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-            z-index: 10000;
-            min-width: 250px;
-        }
+        /* 进度条 */
         .bili-classifier-progress-bar {
             width: 100%;
             height: 10px;
-            background: #f0f0f0;
-            border-radius: 5px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 16px;
             margin: 8px 0;
             overflow: hidden;
+            box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.2);
         }
         .bili-classifier-progress-fill {
             height: 100%;
-            background: linear-gradient(90deg, #00a1d6, #00c4ff);
-            border-radius: 5px;
+            background: var(--primary-gradient);
+            border-radius: 16px;
             transition: width 0.3s;
+            box-shadow: 0 0 10px rgba(0, 196, 255, 0.4);
         }
+        /* 浮动按钮容器 */
         .bili-classifier-float-btn {
             position: fixed;
             right: 30px;
@@ -197,6 +329,49 @@
             gap: 10px;
             align-items: flex-end;
         }
+        /* 链接按钮 */
+        .bili-classifier-link-btn {
+            padding: 6px 12px;
+            background: rgba(255, 255, 255, 0.08);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 16px;
+            color: var(--text-secondary);
+            text-decoration: none;
+            font-size: 13px;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            transition: var(--transition);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+            height: 32px;
+        }
+        .bili-classifier-link-btn:hover {
+            background: rgba(255, 255, 255, 0.12);
+            border-color: rgba(255, 255, 255, 0.15);
+            transform: translateY(-1px);
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+            color: var(--text-primary);
+        }
+        /* 设置模态框 */
+        .bili-classifier-settings-modal {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(255, 255, 255, calc(var(--glass-opacity) * 1.2)) !important;
+            backdrop-filter: blur(50px) saturate(180%);
+            -webkit-backdrop-filter: blur(50px) saturate(180%);
+            padding: 20px;
+            border-radius: 16px;
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            box-shadow: 0 15px 35px rgba(0, 0, 0, 0.12),
+                       var(--glass-inset-light);
+            z-index: 10001;
+            width: 320px;
+        }
+        /* 单选按钮组 */
         .bili-classifier-radio-group {
             display: flex;
             gap: 15px;
@@ -207,28 +382,335 @@
             align-items: center;
             gap: 5px;
             cursor: pointer;
+            padding: 8px 12px;
+            background: rgba(255, 255, 255, 0.06);
+            border-radius: 16px;
+            transition: var(--transition);
+            border: 1px solid transparent;
+            color: var(--text-primary);
         }
+        .bili-classifier-radio-label:hover {
+            background: rgba(255, 255, 255, 0.1);
+            border-color: rgba(255, 255, 255, 0.1);
+        }
+        /* 页脚 */
+        .bili-classifier-footer {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding-top: 15px;
+            border-top: 1px solid rgba(255, 255, 255, 0.08);
+            margin-top: auto;
+        }
+        /* 标题样式 */
+        h3, h4 {
+            color: var(--text-primary);
+            margin: 0 0 20px;
+            font-weight: 600;
+        }
+        h3 {
+            font-size: 24px;
+            background: var(--primary-gradient);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        h4 {
+            font-size: 18px;
+            color: var(--text-secondary);
+        }
+        /* 选项组 */
         .bili-classifier-option-group {
             margin: 15px 0;
             padding: 15px;
-            border: 1px solid #eee;
-            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 16px;
         }
+        /* 内容区域 */
         .bili-classifier-content {
             flex: 1;
             overflow-y: auto;
+            padding-right: 10px;
+            margin-top: 5px;
+        }
+        /* 自定义滚动条 */
+        .bili-classifier-content::-webkit-scrollbar {
+            width: 6px;
+        }
+        .bili-classifier-content::-webkit-scrollbar-track {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 3px;
+        }
+        .bili-classifier-content::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 3px;
+        }
+        .bili-classifier-content::-webkit-scrollbar-thumb:hover {
+            background: rgba(255, 255, 255, 0.3);
+        }
+        /* 设置组样式 */
+        .bili-classifier-settings-group {
+            margin: 15px 0;
+        }
+        .bili-classifier-settings-label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 500;
+            color: var(--text-primary);
+        }
+        .bili-classifier-settings-input {
+            width: 100%;
+            padding: 8px 12px;
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            border-radius: 24px;
+            color: var(--text-primary);
+            box-sizing: border-box;
+            border: none;
+            outline: none;
+        }
+        .bili-classifier-settings-hint {
+            margin-top: 4px;
+            font-size: 12px;
+            color: var(--text-muted);
+        }
+        .bili-classifier-settings-footer {
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+            margin-top: 20px;
+        }
+        /* 主题切换按钮 */
+        .bili-classifier-theme-toggle {
+            position: relative;
+            width: 48px;
+            height: 24px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            cursor: pointer;
+            transition: var(--transition);
+        }
+        .bili-classifier-theme-toggle::before {
+            content: '';
+            position: absolute;
+            top: 2px;
+            left: 2px;
+            width: 20px;
+            height: 20px;
+            background: var(--primary-color);
+            border-radius: 50%;
+            transition: transform 0.3s ease;
+        }
+        .bili-classifier-theme-toggle.active {
+            background: rgba(0, 161, 214, 0.3);
+        }
+        .bili-classifier-theme-toggle.active::before {
+            transform: translateX(24px);
+        }
+        /* 链接组 */
+        .bili-classifier-links {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+        /* 按钮组 */
+        .bili-classifier-footer-buttons {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+        .bili-classifier-float-links {
+            display: flex;
+            gap: 10px;
+        }
+        .bili-classifier-group-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+            gap: 10px;
+        }
+       /* 二级菜单样式 */
+        .bili-classifier-submenu {
+            margin-top: 10px;
+            padding: 12px;
+            background: rgba(255, 255, 255, 0.03);
+            border-radius: 24px;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            width: 100%;
+            box-sizing: border-box;
+        }
+        .bili-classifier-submenu-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            cursor: pointer;
+            padding: 4px 0;
+            font-size: 13px;
+        }
+        .bili-classifier-submenu-content {
+            margin-top: 8px;
+            display: none;
+        }
+        .bili-classifier-submenu-content.expanded {
+            display: block;
+        }
+        .bili-classifier-submenu-arrow {
+            transition: transform 0.3s ease;
+        }
+        .bili-classifier-submenu-arrow.expanded {
+            transform: rotate(180deg);
+        }
+        /* 全局界面透明度选择框 */
+        .bili-classifier-settings-group .bili-classifier-opacity-slider {
+            flex: 1;
+            height: 6px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 3px;
+            outline: none;
+            -webkit-appearance: none;
+            max-width: none;
+        }
+        .bili-classifier-settings-group .bili-classifier-opacity-slider::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 16px;
+            height: 16px;
+            background: var(--primary-color);
+            border-radius: 50%;
+            cursor: pointer;
+        }
+        .bili-classifier-settings-group .bili-classifier-opacity-value {
+            min-width: 40px;
+            font-size: 13px;
+            text-align: center;
+            color: var(--text-muted);
+        }
+        /* 紧凑颜色设置样式 */
+        .bili-classifier-color-grid {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 10px;
+            margin-top: 10px;
+        }
+        .bili-classifier-color-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            width: 100%;
+            max-width: 260px;
+        }
+        .bili-classifier-color-label {
+            min-width: 70px;
+            font-size: 11px;
+            color: var(--text-secondary);
+            font-weight: 500;
+        }
+        .bili-classifier-color-input {
+            width: 24px;
+            height: 24px;
+            padding: 0;
+            border: none;
+            border-radius: 0px;
+            cursor: pointer;
+            flex-shrink: 0;
+        }
+        /* 颜色设置内的紧凑滑块样式 */
+        .bili-classifier-color-item .bili-classifier-opacity-slider {
+            flex: 1;
+            height: 4px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 2px;
+            outline: none;
+            -webkit-appearance: none;
+            max-width: 100px;
+            margin: 0 4px;
+        }
+        .bili-classifier-color-item .bili-classifier-opacity-slider::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 12px;
+            height: 12px;
+            background: var(--primary-color);
+            border-radius: 50%;
+            cursor: pointer;
+            border: 1px solid rgba(255, 255, 255, 0.3);
+        }
+        .bili-classifier-color-item .bili-classifier-opacity-value {
+            min-width: 35px;
+            font-size: 10px;
+            text-align: center;
+            color: var(--text-muted);
+            font-weight: 500;
+            white-space: nowrap;
+            flex-shrink: 0;
+        }
+        /* 高级玻璃效果设置 */
+        .bili-classifier-advanced-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            width: 100%;
+            max-width: 260px;
+            margin-bottom: 8px;
+        }
+        .bili-classifier-advanced-label {
+            min-width: 80px;
+            font-size: 11px;
+            color: var(--text-secondary);
+            font-weight: 500;
+        }
+        .bili-classifier-advanced-slider {
+            flex: 1;
+            height: 4px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 2px;
+            outline: none;
+            -webkit-appearance: none;
+            max-width: 120px;
+            margin: 0 4px;
+        }
+        .bili-classifier-advanced-slider::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 12px;
+            height: 12px;
+            background: var(--primary-color);
+            border-radius: 50%;
+            cursor: pointer;
+            border: 1px solid rgba(255, 255, 255, 0.3);
+        }
+        .bili-classifier-advanced-value {
+            min-width: 40px;
+            font-size: 10px;
+            text-align: center;
+            color: var(--text-muted);
+            font-weight: 500;
+            white-space: nowrap;
+            flex-shrink: 0;
         }
     `);
 
-    // --- 工具函数 ---
+    // --- Utility Functions ---
+
+    /**
+     * A collection of utility functions for common tasks.
+     * @namespace utils
+     */
     const utils = {
-        /** 获取CSRF token */
+        /**
+         * Retrieves the Bilibili CSRF token from cookies.
+         * @returns {string} The CSRF token (bili_jct).
+         */
         getCsrf() {
             const match = document.cookie.match(/bili_jct=([^;]+)/);
             return match ? match[1] : '';
         },
 
-        /** 日志记录 */
+        /**
+         * Logs a message to the console with custom styling.
+         * @param {string} message - The message to log.
+         * @param {'info'|'error'|'success'|'warning'} [type='info'] - The type of log message.
+         */
         log(message, type = 'info') {
             const styles = {
                 info: 'color: #00a1d6',
@@ -239,57 +721,639 @@
             console.log(`%c[收藏夹分类] ${message}`, styles[type] || styles.info);
         },
 
-        /** 稳健的API请求封装（解析responseText兼容性） */
-        apiRequest(options) {
-            return new Promise((resolve, reject) => {
-                GM_xmlhttpRequest({
-                    ...options,
-                    onload: (response) => {
+        /**
+         * A robust wrapper for GM_xmlhttpRequest that includes automatic retries.
+         * @param {object} options - The options for GM_xmlhttpRequest.
+         * @returns {Promise<object|string>} A promise that resolves with the parsed JSON response or response text.
+         * @throws {Error} Throws an error if the request fails after all retry attempts.
+         */
+        async apiRequest(options) {
+            let lastError;
+            for (let attempt = 1; attempt <= CONFIG.MAX_RETRY_ATTEMPTS; attempt++) {
+                try {
+                    const response = await new Promise((resolve, reject) => {
+                        GM_xmlhttpRequest({
+                            ...options,
+                            timeout: 30000,
+                            onload: resolve,
+                            onerror: reject,
+                            ontimeout: reject
+                        });
+                    });
+                    const status = response.status;
+                    if (status >= 200 && status < 300) {
                         try {
-                            const status = response.status;
-                            let payload = response.response;
-                            if ((payload === undefined || payload === null) && response.responseText) {
-                                try { payload = JSON.parse(response.responseText); } catch (e) { payload = response.responseText; }
-                            }
-                            if (status >= 200 && status < 300) {
-                                resolve(payload);
-                            } else {
-                                reject(new Error(`请求失败: ${status}`));
-                            }
-                        } catch (err) {
-                            reject(err);
+                            return typeof response.response === 'string' ?
+                                JSON.parse(response.response) :
+                                response.response;
+                        } catch (parseError) {
+                            return response.responseText || response.response;
                         }
-                    },
-                    onerror: (error) => {
-                        reject(new Error(`网络错误`));
-                    },
-                    ontimeout: (err) => {
-                        reject(new Error('请求超时'));
+                    } else if (status === 429 && attempt < CONFIG.MAX_RETRY_ATTEMPTS) {
+                        // Rate limited, wait and retry
+                        await this.delay(1000 * attempt);
+                        continue;
+                    } else {
+                        throw new Error(`请求失败: ${status} ${response.statusText}`);
                     }
-                });
-            });
+                } catch (error) {
+                    lastError = error;
+                    if (attempt < CONFIG.MAX_RETRY_ATTEMPTS) {
+                        await this.delay(1000 * attempt);
+                    }
+                }
+            }
+
+            throw lastError || new Error('API请求失败');
         },
 
-        /** 延迟函数 */
+        /**
+         * Creates a delay for a specified number of milliseconds.
+         * @param {number} ms - The delay duration in milliseconds.
+         * @returns {Promise<void>} A promise that resolves after the delay.
+         */
         delay(ms) {
             return new Promise(resolve => setTimeout(resolve, ms));
+        },
+
+        /**
+         * Safely queries for a single DOM element.
+         * @param {string} selector - The CSS selector.
+         * @param {Document|Element} [context=document] - The context to search within.
+         * @returns {Element|null} The found element or null.
+         */
+        querySafe(selector, context = document) {
+            try {
+                return context.querySelector(selector);
+            } catch (error) {
+                return null;
+            }
+        },
+
+        /**
+         * Safely queries for all matching DOM elements.
+         * @param {string} selector - The CSS selector.
+         * @param {Document|Element} [context=document] - The context to search within.
+         * @returns {Element[]} An array of found elements.
+         */
+        queryAllSafe(selector, context = document) {
+            try {
+                return Array.from(context.querySelectorAll(selector));
+            } catch (error) {
+                return [];
+            }
+        },
+
+        /**
+         * Converts a HEX color string to an RGB array.
+         * @param {string} hex - The hex color string (e.g., '#00a1d6').
+         * @returns {number[]} An array of [r, g, b] values, or a default blue if conversion fails.
+         */
+        hexToRgb(hex) {
+            const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+            return result ? [
+                parseInt(result[1], 16),
+                parseInt(result[2], 16),
+                parseInt(result[3], 16)
+            ] : [0, 161, 214]; // Default Bilibili blue
+        },
+
+        /**
+         * Adjusts the brightness of an RGB color.
+         * @param {number[]} rgb - An array of [r, g, b] values.
+         * @param {number} amount - The amount to adjust brightness by (positive for lighter, negative for darker).
+         * @returns {number[]} The new, clamped [r, g, b] array.
+         */
+        adjustColor(rgb, amount) {
+            return rgb.map(value => Math.max(0, Math.min(255, value + amount)));
         }
     };
 
-    // --- API服务 ---
+    // --- Settings Manager ---
+
+    /**
+     * Manages user settings, including loading, saving, and applying them to the UI.
+     * @class
+     */
+    class SettingsManager {
+        constructor() {
+            this.settings = {
+                recognitionMode: 'all',
+                customCount: 100,
+                theme: 'dark',
+                // Color settings
+                primaryColor: '#00a1d6',
+                primaryOpacity: 0.4,
+                secondaryColor: '#ffffff',
+                secondaryOpacity: 0.1,
+                dangerColor: '#ff4d4f',
+                dangerOpacity: 0.4,
+                // Global opacity
+                glassOpacity: 0.05,
+                // Advanced glass effects
+                blurIntensity: 35,
+                saturation: 180
+            };
+            this.loadSettings();
+            this.applyAllSettings();
+        }
+
+        /**
+         * Loads settings from localStorage.
+         */
+        loadSettings() {
+            try {
+                const saved = localStorage.getItem('bili_classifier_settings');
+                if (saved) {
+                    const parsed = JSON.parse(saved);
+                    this.settings = { ...this.settings,
+                        ...parsed
+                    };
+                }
+            } catch (error) {
+                utils.log('加载设置失败，使用默认设置', 'warning');
+            }
+        }
+
+        /**
+         * Saves the current settings to localStorage.
+         * @returns {boolean} True if saving was successful, false otherwise.
+         */
+        saveSettings() {
+            try {
+                localStorage.setItem('bili_classifier_settings', JSON.stringify(this.settings));
+                return true;
+            } catch (error) {
+                utils.log('保存设置失败', 'warning');
+                return false;
+            }
+        }
+
+        /**
+         * Applies all current settings to the document.
+         */
+        applyAllSettings() {
+            this.applyTheme();
+            this.applyColorSettings();
+            this.applyGlassOpacity();
+            this.applyAdvancedGlassEffects();
+        }
+
+        /**
+         * Applies the light/dark theme by setting CSS variables.
+         */
+        applyTheme() {
+            const root = document.documentElement;
+            if (this.settings.theme === 'light') {
+                root.style.setProperty('--glass-bg', 'rgba(255, 255, 255, 0.15)');
+                root.style.setProperty('--glass-border', 'rgba(255, 255, 255, 0.2)');
+                root.style.setProperty('--text-primary', 'rgba(0, 0, 0, 0.9)');
+                root.style.setProperty('--text-secondary', 'rgba(0, 0, 0, 0.7)');
+                root.style.setProperty('--text-muted', 'rgba(0, 0, 0, 0.5)');
+                root.style.setProperty('--select-text-color', 'rgba(0, 0, 0, 0.9)');
+            } else {
+                root.style.setProperty('--glass-bg', 'rgba(255, 255, 255, 0.08)');
+                root.style.setProperty('--glass-border', 'rgba(255, 255, 255, 0.12)');
+                root.style.setProperty('--text-primary', 'rgba(255, 255, 255, 0.95)');
+                root.style.setProperty('--text-secondary', 'rgba(255, 255, 255, 0.7)');
+                root.style.setProperty('--text-muted', 'rgba(255, 255, 255, 0.5)');
+                root.style.setProperty('--select-text-color', '#000000');
+            }
+        }
+
+        /**
+         * Applies custom color settings by setting CSS variables.
+         */
+        applyColorSettings() {
+            const root = document.documentElement;
+            // Primary color
+            const primaryRgb = utils.hexToRgb(this.settings.primaryColor);
+            const primaryDarkRgb = utils.adjustColor(primaryRgb, -20);
+            root.style.setProperty('--primary-color', this.settings.primaryColor);
+            root.style.setProperty('--primary-rgb', primaryRgb.join(', '));
+            root.style.setProperty('--primary-dark-rgb', primaryDarkRgb.join(', '));
+            root.style.setProperty('--primary-gradient',
+                `linear-gradient(135deg, ${this.settings.primaryColor}, ${this.getAdjustedColor(this.settings.primaryColor, 20)})`);
+            // Button opacities
+            root.style.setProperty('--primary-opacity', this.settings.primaryOpacity);
+            root.style.setProperty('--secondary-opacity', this.settings.secondaryOpacity);
+            root.style.setProperty('--danger-opacity', this.settings.dangerOpacity);
+            // Secondary color
+            const secondaryRgb = utils.hexToRgb(this.settings.secondaryColor);
+            root.style.setProperty('--secondary-rgb', secondaryRgb.join(', '));
+            // Danger color
+            const dangerRgb = utils.hexToRgb(this.settings.dangerColor);
+            const dangerDarkRgb = utils.adjustColor(dangerRgb, -20);
+            root.style.setProperty('--danger-rgb', dangerRgb.join(', '));
+            root.style.setProperty('--danger-dark-rgb', dangerDarkRgb.join(', '));
+            // Update styles that depend on these colors
+            this.updateDynamicStyles();
+        }
+
+        /**
+         * Applies the global glass opacity setting.
+         */
+        applyGlassOpacity() {
+            const root = document.documentElement;
+            root.style.setProperty('--glass-opacity', this.settings.glassOpacity);
+            root.style.setProperty('--glass-border-opacity', Math.max(0.05, this.settings.glassOpacity * 2));
+        }
+
+        /**
+         * Applies advanced glass effect settings (blur and saturation).
+         */
+        applyAdvancedGlassEffects() {
+            const root = document.documentElement;
+            root.style.setProperty('--blur-intensity', `${this.settings.blurIntensity}px`);
+            root.style.setProperty('--saturation', `${this.settings.saturation}%`);
+        }
+
+        /**
+         * Adjusts a hex color's brightness and returns the new hex string.
+         * @param {string} color - The base hex color.
+         * @param {number} amount - The amount to adjust brightness by.
+         * @returns {string} The new hex color string.
+         */
+        getAdjustedColor(color, amount) {
+            const rgb = utils.hexToRgb(color);
+            const adjusted = utils.adjustColor(rgb, amount);
+            return `#${adjusted.map(v => v.toString(16).padStart(2, '0')).join('')}`;
+        }
+
+        /**
+         * Injects or updates a <style> element for CSS that depends dynamically on settings.
+         */
+        updateDynamicStyles() {
+            const styleId = 'bili-classifier-dynamic-styles';
+            let styleElement = document.getElementById(styleId);
+
+            if (!styleElement) {
+                styleElement = document.createElement('style');
+                styleElement.id = styleId;
+                document.head.appendChild(styleElement);
+            }
+
+            styleElement.textContent = `
+                .bili-classifier-progress-fill {
+                    background: linear-gradient(135deg, ${this.settings.primaryColor}, ${this.getAdjustedColor(this.settings.primaryColor, 20)});
+                }
+                h3 {
+                    background: linear-gradient(135deg, ${this.settings.primaryColor}, ${this.getAdjustedColor(this.settings.primaryColor, 20)});
+                    -webkit-background-clip: text;
+                    -webkit-text-fill-color: transparent;
+                    background-clip: text;
+                }
+                .bili-classifier-theme-toggle::before {
+                    background: ${this.settings.primaryColor};
+                }
+                .bili-classifier-theme-toggle.active {
+                    background: rgba(${utils.hexToRgb(this.settings.primaryColor).join(', ')}, 0.3);
+                }
+            `;
+        }
+
+        /**
+         * Toggles the theme between 'dark' and 'light'.
+         * @returns {string} The new theme name.
+         */
+        toggleTheme() {
+            this.settings.theme = this.settings.theme === 'dark' ? 'light' : 'dark';
+            this.applyAllSettings();
+            return this.settings.theme;
+        }
+
+        /**
+         * Displays the settings modal dialog.
+         * @returns {Promise<boolean>} A promise that resolves with `true` if settings were saved, `false` otherwise.
+         */
+        async showSettingsModal() {
+            return new Promise((resolve) => {
+                const originalSettings = JSON.parse(JSON.stringify(this.settings));
+
+                const modal = document.createElement('div');
+                modal.className = 'bili-classifier-settings-modal bili-classifier-glass';
+                modal.innerHTML = this.generateSettingsHTML();
+                document.body.appendChild(modal);
+
+                this.bindSettingsEvents(modal, resolve, originalSettings);
+            });
+        }
+
+        /**
+         * Generates the HTML content for the settings modal.
+         * @returns {string} The HTML string.
+         */
+        generateSettingsHTML() {
+            return `
+                <h3 style="margin-top: 0;">界面设置</h3>
+                <div class="bili-classifier-settings-group">
+                    <label class="bili-classifier-settings-label">主题模式</label>
+                    <div style="display: flex; align-items: center; gap: 12px; margin-top: 8px;">
+                        <span style="color: var(--text-secondary);">深色</span>
+                        <div class="bili-classifier-theme-toggle ${this.settings.theme === 'light' ? 'active' : ''}" id="themeToggle"></div>
+                        <span style="color: var(--text-secondary);">浅色</span>
+                    </div>
+                </div>
+                <div class="bili-classifier-settings-group">
+                    <label class="bili-classifier-settings-label">识别模式</label>
+                    <div class="bili-classifier-radio-group">
+                        <label class="bili-classifier-radio-label">
+                            <input type="radio" name="recognitionMode" value="all" ${this.settings.recognitionMode === 'all' ? 'checked' : ''}>
+                            全部识别
+                        </label>
+                        <label class="bili-classifier-radio-label">
+                            <input type="radio" name="recognitionMode" value="custom" ${this.settings.recognitionMode === 'custom' ? 'checked' : ''}>
+                            自定义识别
+                        </label>
+                    </div>
+                </div>
+                <div class="bili-classifier-settings-group" id="customCountGroup" style="${this.settings.recognitionMode === 'custom' ? '' : 'display: none;'}">
+                    <label class="bili-classifier-settings-label">最大识别数量</label>
+                    <input type="number" class="bili-classifier-settings-input" id="customCountInput"
+                           value="${this.settings.customCount}" min="1" max="1000">
+                    <div class="bili-classifier-settings-hint">设置每次分类最多处理的视频数量 (1-1000)</div>
+                </div>
+                <div class="bili-classifier-settings-group">
+                    <label class="bili-classifier-settings-label">全局界面透明度</label>
+                    <div style="display: flex; gap: 10px; align-items: center;">
+                        <input type="range" class="bili-classifier-opacity-slider" id="glassOpacityInput"
+                               value="${this.settings.glassOpacity * 100}" min="0" max="100" step="1" style="flex: 1;">
+                        <span class="bili-classifier-opacity-value" id="glassOpacityValue">
+                            ${Math.round(this.settings.glassOpacity * 100)}%
+                        </span>
+                    </div>
+                    <div class="bili-classifier-settings-hint">调整所有玻璃UI元素的透明度 (0%-100%)</div>
+                </div>
+                <div class="bili-classifier-submenu">
+                    <div class="bili-classifier-submenu-header" id="colorSettingsToggle">
+                        <span style="font-weight: 500; color: var(--text-primary);">颜色设置</span>
+                        <svg class="bili-classifier-submenu-arrow" width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M7.41 8.84L12 13.42l4.59-4.58L18 10.25l-6 6-6-6z"/>
+                        </svg>
+                    </div>
+                    <div class="bili-classifier-submenu-content" id="colorSettingsContent">
+                        <div class="bili-classifier-color-grid">
+                            <div class="bili-classifier-color-item">
+                                <span class="bili-classifier-color-label">主按钮</span>
+                                <input type="color" class="bili-classifier-color-input" id="primaryColorInput" value="${this.settings.primaryColor}">
+                                <input type="range" class="bili-classifier-opacity-slider" id="primaryOpacityInput"
+                                       value="${this.settings.primaryOpacity * 100}" min="0" max="100" step="5">
+                                <span class="bili-classifier-opacity-value" id="primaryOpacityValue">
+                                    ${Math.round(this.settings.primaryOpacity * 100)}%
+                                </span>
+                            </div>
+                            <div class="bili-classifier-color-item">
+                                <span class="bili-classifier-color-label">次要按钮</span>
+                                <input type="color" class="bili-classifier-color-input" id="secondaryColorInput" value="${this.settings.secondaryColor}">
+                                <input type="range" class="bili-classifier-opacity-slider" id="secondaryOpacityInput"
+                                       value="${this.settings.secondaryOpacity * 100}" min="0" max="100" step="5">
+                                <span class="bili-classifier-opacity-value" id="secondaryOpacityValue">
+                                    ${Math.round(this.settings.secondaryOpacity * 100)}%
+                                </span>
+                            </div>
+                            <div class="bili-classifier-color-item">
+                                <span class="bili-classifier-color-label">危险按钮</span>
+                                <input type="color" class="bili-classifier-color-input" id="dangerColorInput" value="${this.settings.dangerColor}">
+                                <input type="range" class="bili-classifier-opacity-slider" id="dangerOpacityInput"
+                                       value="${this.settings.dangerOpacity * 100}" min="0" max="100" step="5">
+                                <span class="bili-classifier-opacity-value" id="dangerOpacityValue">
+                                    ${Math.round(this.settings.dangerOpacity * 100)}%
+                                </span>
+                            </div>
+                        </div>
+                        <div style="margin-top: 10px; display: flex; justify-content: flex-end;">
+                            <button class="bili-classifier-btn secondary" id="resetColors" style="font-size: 12px; padding: 4px 8px; height: 24px;">重置颜色</button>
+                        </div>
+                    </div>
+                </div>
+                <div class="bili-classifier-submenu">
+                    <div class="bili-classifier-submenu-header" id="advancedGlassToggle">
+                        <span style="font-weight: 500; color: var(--text-primary);">高级玻璃效果</span>
+                        <svg class="bili-classifier-submenu-arrow" width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M7.41 8.84L12 13.42l4.59-4.58L18 10.25l-6 6-6-6z"/>
+                        </svg>
+                    </div>
+                    <div class="bili-classifier-submenu-content" id="advancedGlassContent">
+                        <div style="margin: 10px 0; font-size: 12px; color: var(--text-muted);">
+                            调整这些参数可以获得更接近玻璃的效果
+                        </div>
+                        <div class="bili-classifier-advanced-item">
+                            <span class="bili-classifier-advanced-label">模糊强度</span>
+                            <input type="range" class="bili-classifier-advanced-slider" id="blurIntensityInput"
+                                   value="${this.settings.blurIntensity}" min="20" max="60" step="5">
+                            <span class="bili-classifier-advanced-value" id="blurIntensityValue">
+                                ${this.settings.blurIntensity}px
+                            </span>
+                        </div>
+                        <div class="bili-classifier-advanced-item">
+                            <span class="bili-classifier-advanced-label">颜色饱和度</span>
+                            <input type="range" class="bili-classifier-advanced-slider" id="saturationInput"
+                                   value="${this.settings.saturation}" min="120" max="220" step="10">
+                            <span class="bili-classifier-advanced-value" id="saturationValue">
+                                ${this.settings.saturation}%
+                            </span>
+                        </div>
+                    </div>
+                </div>
+                <div class="bili-classifier-settings-footer">
+                    <button class="bili-classifier-btn secondary" id="cancelSettings">取消</button>
+                    <button class="bili-classifier-btn primary" id="saveSettings">保存设置</button>
+                </div>
+            `;
+        }
+
+        /**
+         * Binds event listeners to the elements within the settings modal.
+         * @param {Element} modal - The modal element.
+         * @param {function} resolve - The resolve function of the parent promise.
+         * @param {object} originalSettings - The settings object before any changes were made.
+         */
+        bindSettingsEvents(modal, resolve, originalSettings) {
+            const modeRadios = utils.queryAllSafe('input[name="recognitionMode"]', modal);
+            const customCountGroup = utils.querySafe('#customCountGroup', modal);
+            const customCountInput = utils.querySafe('#customCountInput', modal);
+            const cancelBtn = utils.querySafe('#cancelSettings', modal);
+            const saveBtn = utils.querySafe('#saveSettings', modal);
+            const themeToggle = utils.querySafe('#themeToggle', modal);
+            const colorSettingsToggle = utils.querySafe('#colorSettingsToggle', modal);
+            const colorSettingsContent = utils.querySafe('#colorSettingsContent', modal);
+            const colorSettingsArrow = utils.querySafe('#colorSettingsToggle .bili-classifier-submenu-arrow', modal);
+            const primaryColorInput = utils.querySafe('#primaryColorInput', modal);
+            const primaryOpacityInput = utils.querySafe('#primaryOpacityInput', modal);
+            const primaryOpacityValue = utils.querySafe('#primaryOpacityValue', modal);
+            const secondaryColorInput = utils.querySafe('#secondaryColorInput', modal);
+            const secondaryOpacityInput = utils.querySafe('#secondaryOpacityInput', modal);
+            const secondaryOpacityValue = utils.querySafe('#secondaryOpacityValue', modal);
+            const dangerColorInput = utils.querySafe('#dangerColorInput', modal);
+            const dangerOpacityInput = utils.querySafe('#dangerOpacityInput', modal);
+            const dangerOpacityValue = utils.querySafe('#dangerOpacityValue', modal);
+            const resetColorsBtn = utils.querySafe('#resetColors', modal);
+            const glassOpacityInput = utils.querySafe('#glassOpacityInput', modal);
+            const glassOpacityValue = utils.querySafe('#glassOpacityValue', modal);
+            const advancedGlassToggle = utils.querySafe('#advancedGlassToggle', modal);
+            const advancedGlassContent = utils.querySafe('#advancedGlassContent', modal);
+            const blurIntensityInput = utils.querySafe('#blurIntensityInput', modal);
+            const blurIntensityValue = utils.querySafe('#blurIntensityValue', modal);
+            const saturationInput = utils.querySafe('#saturationInput', modal);
+            const saturationValue = utils.querySafe('#saturationValue', modal);
+
+            if (!themeToggle || !cancelBtn || !saveBtn) {
+                modal.remove();
+                resolve(false);
+                return;
+            }
+
+            const applyPreview = () => this.applyAllSettings();
+            const updateOpacityDisplay = (input, display) => {
+                if (input && display) display.textContent = `${input.value}%`;
+            };
+
+            themeToggle.addEventListener('click', () => {
+                this.settings.theme = this.settings.theme === 'dark' ? 'light' : 'dark';
+                themeToggle.classList.toggle('active', this.settings.theme === 'light');
+                applyPreview();
+            });
+
+            modeRadios.forEach(radio => {
+                radio.addEventListener('change', () => {
+                    if (customCountGroup) {
+                        customCountGroup.style.display = radio.value === 'custom' ? 'block' : 'none';
+                    }
+                });
+            });
+
+            if (colorSettingsToggle && colorSettingsContent && colorSettingsArrow) {
+                colorSettingsToggle.addEventListener('click', () => {
+                    colorSettingsContent.classList.toggle('expanded');
+                    colorSettingsArrow.classList.toggle('expanded');
+                });
+            }
+
+            if (advancedGlassToggle && advancedGlassContent) {
+                advancedGlassToggle.addEventListener('click', () => {
+                    advancedGlassContent.classList.toggle('expanded');
+                    advancedGlassToggle.querySelector('.bili-classifier-submenu-arrow').classList.toggle('expanded');
+                });
+            }
+
+            // Bind events for live preview of settings
+            [
+                { input: primaryColorInput,   key: 'primaryColor',       isColor: true },
+                { input: primaryOpacityInput, key: 'primaryOpacity',     display: primaryOpacityValue },
+                { input: secondaryColorInput, key: 'secondaryColor',     isColor: true },
+                { input: secondaryOpacityInput, key: 'secondaryOpacity', display: secondaryOpacityValue },
+                { input: dangerColorInput,    key: 'dangerColor',        isColor: true },
+                { input: dangerOpacityInput,  key: 'dangerOpacity',      display: dangerOpacityValue },
+                { input: glassOpacityInput,   key: 'glassOpacity',       display: glassOpacityValue },
+                { input: blurIntensityInput,  key: 'blurIntensity',      display: blurIntensityValue,  suffix: 'px' },
+                { input: saturationInput,     key: 'saturation',         display: saturationValue,     suffix: '%' }
+            ].forEach(({ input, key, display, isColor, suffix }) => {
+                if (input) {
+                    input.addEventListener('input', () => {
+                        const value = isColor ? input.value : parseInt(input.value);
+                        this.settings[key] = isColor ? value : (key.includes('Opacity') ? value / 100 : value);
+                        if (display) {
+                           display.textContent = `${value}${suffix || ''}`;
+                        }
+                        if (key.includes('Opacity') && !isColor) {
+                           updateOpacityDisplay(input, display);
+                        }
+                        applyPreview();
+                    });
+                }
+            });
+
+            if (resetColorsBtn) {
+                resetColorsBtn.addEventListener('click', () => {
+                    this.settings.primaryColor = '#00a1d6';
+                    this.settings.primaryOpacity = 0.4;
+                    this.settings.secondaryColor = '#ffffff';
+                    this.settings.secondaryOpacity = 0.1;
+                    this.settings.dangerColor = '#ff4d4f';
+                    this.settings.dangerOpacity = 0.4;
+
+                    if (primaryColorInput) primaryColorInput.value = this.settings.primaryColor;
+                    if (primaryOpacityInput) primaryOpacityInput.value = this.settings.primaryOpacity * 100;
+                    if (secondaryColorInput) secondaryColorInput.value = this.settings.secondaryColor;
+                    if (secondaryOpacityInput) secondaryOpacityInput.value = this.settings.secondaryOpacity * 100;
+                    if (dangerColorInput) dangerColorInput.value = this.settings.dangerColor;
+                    if (dangerOpacityInput) dangerOpacityInput.value = this.settings.dangerOpacity * 100;
+
+                    updateOpacityDisplay(primaryOpacityInput, primaryOpacityValue);
+                    updateOpacityDisplay(secondaryOpacityInput, secondaryOpacityValue);
+                    updateOpacityDisplay(dangerOpacityInput, dangerOpacityValue);
+                    applyPreview();
+                });
+            }
+
+            cancelBtn.addEventListener('click', () => {
+                this.settings = originalSettings;
+                applyPreview();
+                modal.remove();
+                resolve(false);
+            });
+
+            saveBtn.addEventListener('click', () => {
+                const selectedMode = utils.querySafe('input[name="recognitionMode"]:checked', modal);
+                if (!selectedMode || !customCountInput) {
+                    modal.remove();
+                    resolve(false);
+                    return;
+                }
+                this.settings.recognitionMode = selectedMode.value;
+                this.settings.customCount = Math.max(1, Math.min(1000, parseInt(customCountInput.value) || 100));
+
+                if (this.saveSettings()) {
+                    modal.remove();
+                    resolve(true);
+                } else {
+                    alert('保存设置失败，请检查控制台');
+                }
+            });
+
+            modal.addEventListener('click', (e) => {
+                if (e.target === modal) {
+                    this.settings = originalSettings;
+                    applyPreview();
+                    modal.remove();
+                    resolve(false);
+                }
+            });
+        }
+
+        /**
+         * Gets the maximum number of videos to process based on current settings.
+         * @returns {number} The limit, or Infinity if set to 'all'.
+         */
+        getRecognitionLimit() {
+            return this.settings.recognitionMode === 'all' ?
+                Infinity : this.settings.customCount;
+        }
+    }
+
+    // --- API Service ---
+
+    /**
+     * A collection of functions for interacting with the Bilibili API.
+     * @namespace apiService
+     */
     const apiService = {
-        /** 获取用户收藏夹列表 */
+        /**
+         * Fetches all favorites folders created by a user.
+         * @returns {Promise<Array<object>>} A promise that resolves with the list of folders.
+         */
         async getUserFavLists() {
-            // 尝试获取 mid（user id）
             let mid = '';
             try {
-                mid = window.location.pathname.split('/')[1] || '';
+                const pathParts = window.location.pathname.split('/').filter(Boolean);
+                mid = pathParts[0] || '';
                 if (!mid) {
-                    // 备用：尝试从页面 meta 或脚本变量获取（若无则抛错）
                     const metaMid = document.querySelector('meta[name="mid"]')?.content;
                     if (metaMid) mid = metaMid;
                 }
-            } catch (e) { mid = ''; }
+            } catch (error) {
+                utils.log('解析mid失败', 'warning');
+            }
 
             if (!mid) {
                 throw new Error('无法获取用户UID(mid)，请在用户收藏夹页面运行脚本。');
@@ -297,56 +1361,68 @@
 
             const response = await utils.apiRequest({
                 method: 'GET',
-                url: `https://api.bilibili.com/x/v3/fav/folder/created/list-all?up_mid=${mid}`,
-                responseType: 'json'
+                url: `https://api.bilibili.com/x/v3/fav/folder/created/list-all?up_mid=${mid}`
             });
-
-            return response?.data?.list || [];
+            if (!response?.data?.list) {
+                throw new Error('获取收藏夹列表失败');
+            }
+            return response.data.list;
         },
 
-        /** 获取视频详细信息 */
+        /**
+         * Fetches detailed information for a single video.
+         * @param {number|string} aid - The video's AID.
+         * @returns {Promise<object>} A promise that resolves with the video's data.
+         */
         async getVideoInfo(aid) {
             const response = await utils.apiRequest({
                 method: 'GET',
-                url: `https://api.bilibili.com/x/web-interface/view?aid=${aid}`,
-                responseType: 'json'
+                url: `https://api.bilibili.com/x/web-interface/view?aid=${aid}`
             });
-
-            // 兼容性处理
-            const data = response?.data || response;
+            const data = response?.data;
             if (!data) {
                 throw new Error(`视频 ${aid} 可能已失效或无法访问`);
             }
-            utils.log(`获取视频 ${aid} 信息: ${data.title || data.typename || aid}`, 'info');
+            utils.log(`获取视频 ${aid} 信息: ${data.title || '未知标题'}`, 'info');
             return data;
         },
 
-        /** 获取收藏夹视频列表（逐页并获取视频信息） 
-         *  新增 progressCb 参数：每处理完一个视频会调用 progressCb(currentCount)
+        /**
+         * Fetches the list of videos from a specific favorites folder, with pagination.
+         * @param {number|string} mediaId - The ID of the favorites folder.
+         * @param {number} [maxCount=Infinity] - The maximum number of videos to fetch.
+         * @param {number} [ps=CONFIG.BATCH_SIZE] - Page size.
+         * @param {number} [pn=1] - Page number.
+         * @param {Array<object>} [videos=[]] - An accumulator for the video list.
+         * @param {function(number)|null} [progressCb=null] - A callback function for progress updates.
+         * @returns {Promise<Array<object>>} A promise that resolves with the list of videos.
          */
-        async getFavVideos(mediaId, ps = CONFIG.BATCH_SIZE, pn = 1, videos = [], progressCb = null) {
+        async getFavVideos(mediaId, maxCount = Infinity, ps = CONFIG.BATCH_SIZE, pn = 1, videos = [], progressCb = null) {
+            if (videos.length >= maxCount) {
+                return videos.slice(0, maxCount);
+            }
+
             const response = await utils.apiRequest({
                 method: 'GET',
-                url: `https://api.bilibili.com/x/v3/fav/resource/list?media_id=${mediaId}&pn=${pn}&ps=${ps}&order=mtime&type=0&platform=web`,
-                responseType: 'json'
+                url: `https://api.bilibili.com/x/v3/fav/resource/list?media_id=${mediaId}&pn=${pn}&ps=${ps}&order=mtime&type=0&platform=web`
             });
-
             const data = response?.data;
-            if (!data || !data.medias) {
+            if (!data?.medias) {
                 throw new Error('获取视频列表失败或接口返回异常');
             }
 
             for (const video of data.medias) {
+                if (videos.length >= maxCount) break;
                 try {
                     const vid = video.id || video.rid || video.aid;
                     if (!vid) {
                         utils.log('跳过无效视频条目', 'warning');
                         continue;
                     }
-                    const videoInfo = await apiService.getVideoInfo(vid);
+                    const videoInfo = await this.getVideoInfo(vid);
                     videos.push({
                         aid: vid,
-                        title: video.title || videoInfo.title || '',
+                        title: video.title || videoInfo.title || '未知标题',
                         tid: videoInfo.tid || videoInfo.typeid || 0,
                         tname: videoInfo.tname || videoInfo.typename || '未知',
                         play: (videoInfo.stat && videoInfo.stat.view) || video.play || 0
@@ -355,38 +1431,41 @@
                     utils.log(`跳过视频 ${video.id || '未知'}: ${error.message}`, 'warning');
                 }
 
-                // 每获取一个有效/跳过一个后通知进度回调（count = 当前已收集的视频数）
                 try {
-                    if (typeof progressCb === 'function') progressCb(videos.length);
-                } catch (e) {
-                    /* 忽略回调错误 */
+                    if (typeof progressCb === 'function') {
+                        progressCb(videos.length);
+                    }
+                } catch (error) {
+                    utils.log('进度回调执行失败', 'warning');
                 }
 
                 await utils.delay(CONFIG.INFO_FETCH_DELAY);
             }
 
-            if (data.has_more) {
-                return await apiService.getFavVideos(mediaId, ps, pn + 1, videos, progressCb);
+            if (data.has_more && videos.length < maxCount) {
+                return await this.getFavVideos(mediaId, maxCount, ps, pn + 1, videos, progressCb);
             }
 
-            return videos;
+            return videos.slice(0, maxCount);
         },
 
-        /** 创建收藏夹 */
+        /**
+         * Creates a new favorites folder.
+         * @param {string} title - The title for the new folder.
+         * @returns {Promise<number>} A promise that resolves with the ID of the new folder.
+         */
         async createFolder(title) {
             const csrf = utils.getCsrf();
-            if (!csrf) throw new Error('缺少 csrf (bili_jct)，请登录并允许脚本读取 cookie。');
+            if (!csrf) {
+                throw new Error('缺少 csrf (bili_jct)，请登录并允许脚本读取 cookie。');
+            }
 
             const response = await utils.apiRequest({
                 method: 'POST',
                 url: 'https://api.bilibili.com/x/v3/fav/folder/add',
-                headers: {
-                    'Content-Type': 'application/x-www-form-urlencoded'
-                },
-                data: `csrf=${csrf}&title=${encodeURIComponent(title)}&jsonp=jsonp`,
-                responseType: 'json'
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                data: `csrf=${csrf}&title=${encodeURIComponent(title)}&jsonp=jsonp`
             });
-
             if (response?.code === 0) {
                 return response.data.id;
             } else {
@@ -394,42 +1473,48 @@
             }
         },
 
-        /** 添加视频到收藏夹 */
+        /**
+         * Adds a video to a favorites folder.
+         * @param {number|string} aid - The video's AID.
+         * @param {number|string} fid - The target folder's ID.
+         * @returns {Promise<object>} A promise that resolves with the API response.
+         */
         async addToFav(aid, fid) {
             const csrf = utils.getCsrf();
-            if (!csrf) throw new Error('缺少 csrf (bili_jct)，请登录并允许脚本读取 cookie。');
+            if (!csrf) {
+                throw new Error('缺少 csrf (bili_jct)，请登录并允许脚本读取 cookie。');
+            }
 
             const response = await utils.apiRequest({
                 method: 'POST',
                 url: 'https://api.bilibili.com/x/v3/fav/resource/deal',
-                headers: {
-                    'Content-Type': 'application/x-www-form-urlencoded'
-                },
-                data: `csrf=${csrf}&rid=${aid}&type=2&add_media_ids=${fid}&jsonp=jsonp`,
-                responseType: 'json'
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                data: `csrf=${csrf}&rid=${aid}&type=2&add_media_ids=${fid}&jsonp=jsonp`
             });
-
             if (response?.code !== 0) {
                 throw new Error(response?.message || '添加视频失败');
             }
             return response;
         },
 
-        /** 从收藏夹移除视频 */
+        /**
+         * Removes a video from a favorites folder.
+         * @param {number|string} aid - The video's AID.
+         * @param {number|string} fid - The source folder's ID.
+         * @returns {Promise<object>} A promise that resolves with the API response.
+         */
         async removeFromFav(aid, fid) {
             const csrf = utils.getCsrf();
-            if (!csrf) throw new Error('缺少 csrf (bili_jct)，请登录并允许脚本读取 cookie。');
+            if (!csrf) {
+                throw new Error('缺少 csrf (bili_jct)，请登录并允许脚本读取 cookie。');
+            }
 
             const response = await utils.apiRequest({
                 method: 'POST',
                 url: 'https://api.bilibili.com/x/v3/fav/resource/deal',
-                headers: {
-                    'Content-Type': 'application/x-www-form-urlencoded'
-                },
-                data: `csrf=${csrf}&rid=${aid}&type=2&del_media_ids=${fid}&jsonp=jsonp`,
-                responseType: 'json'
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                data: `csrf=${csrf}&rid=${aid}&type=2&del_media_ids=${fid}&jsonp=jsonp`
             });
-
             if (response?.code !== 0) {
                 throw new Error(response?.message || '移除视频失败');
             }
@@ -437,79 +1522,144 @@
         }
     };
 
-    // --- UI管理 ---
+    // --- UI Manager ---
+
+    /**
+     * Handles creation, updating, and removal of UI elements like progress bars.
+     * @namespace uiManager
+     */
     const uiManager = {
-        /** 创建进度条 */
+        /**
+         * Creates and displays a progress bar element.
+         * @param {string} id - The ID for the new element.
+         * @param {string} [initialMessage='正在处理...'] - The initial message to display.
+         * @returns {Element} The created progress bar element.
+         */
         createProgressDiv(id, initialMessage = '正在处理...') {
+            const existing = document.getElementById(id);
+            if (existing) existing.remove();
+
             const div = document.createElement('div');
             div.id = id;
-            div.className = 'bili-classifier-progress';
+            div.className = 'bili-classifier-progress bili-classifier-glass';
             div.innerHTML = `
-                <div>${initialMessage}</div>
+                <div style="font-weight: 500;">${initialMessage}</div>
                 <div class="bili-classifier-progress-bar">
                     <div class="bili-classifier-progress-fill" style="width: 0%"></div>
                 </div>
-                <div>0/0</div>
+                <div style="font-size: 13px; color: var(--text-secondary);">0/0</div>
             `;
             document.body.appendChild(div);
             return div;
         },
 
-        /** 更新进度，避免除零 */
+        /**
+         * Updates the state of a progress bar.
+         * @param {string} id - The ID of the progress bar element.
+         * @param {string} message - The new message to display.
+         * @param {number} current - The current progress value.
+         * @param {number} total - The total value for the progress.
+         * @param {number} [skipped=0] - The number of skipped items.
+         */
         updateProgress(id, message, current, total, skipped = 0) {
-            const progressDiv = document.getElementById(id) || this.createProgressDiv(id, message);
-            progressDiv.querySelector('div:first-child').textContent = message;
-            const pct = (total && total > 0) ? Math.min(100, Math.max(0, (current / total) * 100)) : (current > 0 ? 100 : 0);
-            progressDiv.querySelector('.bili-classifier-progress-fill').style.width = `${pct}%`;
-            progressDiv.querySelector('div:last-child').textContent =
-                `${current}/${total}${skipped > 0 ? ` (跳过${skipped}个)` : ''}`;
+            let progressDiv = document.getElementById(id);
+            if (!progressDiv) {
+                progressDiv = this.createProgressDiv(id, message);
+            }
+
+            const firstDiv = progressDiv.querySelector('div:first-child');
+            const progressFill = progressDiv.querySelector('.bili-classifier-progress-fill');
+            const lastDiv = progressDiv.querySelector('div:last-child');
+
+            if (firstDiv) firstDiv.textContent = message;
+            if (progressFill) {
+                const percentage = total > 0 ? Math.min(100, Math.max(0, (current / total) * 100)) : (current > 0 ? 100 : 0);
+                progressFill.style.width = `${percentage}%`;
+            }
+            if (lastDiv) {
+                lastDiv.textContent = `${current}/${total}${skipped > 0 ? ` (跳过${skipped}个)` : ''}`;
+            }
         },
 
-        /** 移除进度条 */
+        /**
+         * Removes a progress bar from the DOM.
+         * @param {string} id - The ID of the element to remove.
+         */
         removeProgress(id) {
-            document.getElementById(id)?.remove();
+            const element = document.getElementById(id);
+            if (element) {
+                element.remove();
+            }
         }
     };
 
-    // --- 配置界面 ---
+    // --- Configuration Modal ---
+
+    /**
+     * Manages the main configuration modal where users choose how to classify videos.
+     * @class
+     */
     class ConfigModal {
+        /**
+         * @param {object} tidGroups - An object grouping videos by their type ID (tid).
+         */
         constructor(tidGroups) {
             this.tidGroups = tidGroups;
             this.existingFolders = [];
             this.modal = null;
+            this.resolve = null;
+            this.reject = null;
         }
 
-        /** 创建模态框 */
+        /**
+         * Creates and displays the modal, returning a promise that resolves with the user's configuration.
+         * @returns {Promise<object>} A promise that resolves with the config or rejects if canceled.
+         */
         create() {
-            this.modal = document.createElement('div');
-            this.modal.className = 'bili-classifier-container bili-classifier-modal';
-            this.modal.innerHTML = this.generateHTML();
-            document.body.appendChild(this.modal);
-
-            this.loadExistingFolders();
-            this.bindEvents();
-
             return new Promise((resolve, reject) => {
                 this.resolve = resolve;
                 this.reject = reject;
+                this.modal = document.createElement('div');
+                this.modal.className = 'bili-classifier-container bili-classifier-modal bili-classifier-glass';
+                this.modal.innerHTML = this.generateHTML();
+                document.body.appendChild(this.modal);
+
+                this.loadExistingFolders().catch(error => {
+                    utils.log('加载现有收藏夹失败: ' + error.message, 'warning');
+                }).finally(() => {
+                    this.bindEvents();
+                });
             });
         }
 
-        /** 生成HTML内容 */
+        /**
+         * Generates the complete HTML for the modal.
+         * @returns {string} The modal's inner HTML.
+         */
         generateHTML() {
+            const groupCount = Object.keys(this.tidGroups).length;
             return `
                 <h3>收藏夹自动分类</h3>
                 <div class="bili-classifier-content">
                     ${this.generateOperationMode()}
                     ${this.generateAutoClassifyOption()}
                     ${this.generateCustomGroupsSection()}
-                    ${this.generateDefaultGroupsSection()}
+                    <div id="defaultGroups">
+                        <h4>视频分区列表 (${groupCount}个分区)</h4>
+                        ${Object.entries(this.tidGroups).map(([tid, videos]) => `
+                            <div class="bili-classifier-group tid-group" data-tid="${tid}">
+                                <div class="bili-classifier-group-header">
+                                    <span>${videos[0].tname} (${videos.length}个视频)</span>
+                                </div>
+                            </div>
+                        `).join('')}
+                    </div>
                 </div>
                 ${this.generateFooter()}
             `;
         }
 
-        /** 生成操作模式选择 */
+        /** Generates HTML for the operation mode selection (copy/move). */
         generateOperationMode() {
             return `
                 <div class="bili-classifier-radio-group">
@@ -525,7 +1675,7 @@
             `;
         }
 
-        /** 生成自动分类选项 */
+        /** Generates HTML for the auto-classification checkbox. */
         generateAutoClassifyOption() {
             return `
                 <div class="bili-classifier-option-group">
@@ -537,34 +1687,17 @@
             `;
         }
 
-        /** 生成自定义分组部分 */
+        /** Generates HTML for the custom grouping section. */
         generateCustomGroupsSection() {
             return `
                 <div style="margin-bottom: 20px">
-                    <button class="bili-classifier-btn" id="addCustomGroup">添加自定义分组</button>
+                    <button class="bili-classifier-btn primary" id="addCustomGroup" type="button">添加自定义分组</button>
                 </div>
                 <div id="customGroups"></div>
             `;
         }
 
-        /** 生成默认分组部分 */
-        generateDefaultGroupsSection() {
-            const groupCount = Object.keys(this.tidGroups).length;
-            return `
-                <div id="defaultGroups">
-                    <h4>视频分区列表 (${groupCount}个分区)</h4>
-                    ${Object.entries(this.tidGroups).map(([tid, videos]) => `
-                        <div class="bili-classifier-group tid-group" data-tid="${tid}">
-                            <div class="bili-classifier-group-header">
-                                <span>${videos[0].tname} (${videos.length}个视频)</span>
-                            </div>
-                        </div>
-                    `).join('')}
-                </div>
-            `;
-        }
-
-        /** 生成页脚 */
+        /** Generates the modal's footer HTML with links and action buttons. */
         generateFooter() {
             return `
                 <div class="bili-classifier-footer">
@@ -573,46 +1706,55 @@
                         <a href="https://github.com/RSLN-creator/T-UserScript" target="_blank" class="bili-classifier-link-btn">GitHub项目</a>
                     </div>
                     <div class="bili-classifier-footer-buttons">
-                        <button class="bili-classifier-btn secondary" id="cancelClassify">取消</button>
-                        <button class="bili-classifier-btn" id="startClassify">开始分类</button>
+                        <button class="bili-classifier-btn secondary" id="cancelClassify" type="button">取消</button>
+                        <button class="bili-classifier-btn primary" id="startClassify" type="button">开始分类</button>
                     </div>
                 </div>
             `;
         }
 
-        /** 加载现有收藏夹 */
+        /** Fetches and stores the user's existing favorites folders. */
         async loadExistingFolders() {
             try {
                 this.existingFolders = await apiService.getUserFavLists();
             } catch (error) {
-                utils.log('获取收藏夹列表失败，将无法使用现有收藏夹功能', 'warning');
+                utils.log('获取收藏夹列表失败: ' + error.message, 'warning');
                 this.existingFolders = [];
             }
         }
 
-        /** 绑定事件（使用模态范围内查询，避免全局冲突） */
+        /** Binds all necessary event listeners for the modal. */
         bindEvents() {
-            const modal = this.modal;
-            const addBtn = modal.querySelector('#addCustomGroup');
-            const startBtn = modal.querySelector('#startClassify');
-            const cancelBtn = modal.querySelector('#cancelClassify');
+            if (!this.modal) return;
+            const addBtn = utils.querySafe('#addCustomGroup', this.modal);
+            const startBtn = utils.querySafe('#startClassify', this.modal);
+            const cancelBtn = utils.querySafe('#cancelClassify', this.modal);
 
             if (addBtn) addBtn.addEventListener('click', () => this.addCustomGroup());
             if (startBtn) startBtn.addEventListener('click', () => this.startClassify());
             if (cancelBtn) cancelBtn.addEventListener('click', () => this.cancel());
+
+            this.modal.addEventListener('click', (e) => {
+                if (e.target === this.modal) this.cancel();
+            });
         }
 
-        /** 添加自定义分组 */
+        /** Adds a new UI block for creating a custom group. */
         addCustomGroup() {
+            const container = utils.querySafe('#customGroups', this.modal);
+            if (!container) return;
+
             const groupDiv = document.createElement('div');
             groupDiv.className = 'bili-classifier-group custom-group';
             groupDiv.innerHTML = this.generateCustomGroupHTML();
-            const container = this.modal.querySelector('#customGroups');
-            container && container.appendChild(groupDiv);
+            container.appendChild(groupDiv);
             this.bindCustomGroupEvents(groupDiv);
         }
 
-        /** 生成自定义分组HTML */
+        /**
+         * Generates the HTML for a single custom group block.
+         * @returns {string} The HTML string.
+         */
         generateCustomGroupHTML() {
             const tidOptions = Object.entries(this.tidGroups)
                 .map(([tid, videos]) => `
@@ -621,12 +1763,11 @@
                         ${videos[0].tname} (${videos.length}个视频)
                     </label>
                 `).join('');
-
             return `
                 <div class="bili-classifier-group-header">
                     <input type="text" class="bili-classifier-input folder-name" placeholder="新收藏夹名称">
-                    <button class="bili-classifier-btn secondary use-existing">使用现有收藏夹</button>
-                    <button class="bili-classifier-btn danger remove-group">删除分组</button>
+                    <button class="bili-classifier-btn secondary use-existing" type="button">使用现有收藏夹</button>
+                    <button class="bili-classifier-btn danger remove-group" type="button">删除分组</button>
                 </div>
                 <div class="bili-classifier-checkbox-group tid-options">
                     ${tidOptions}
@@ -634,37 +1775,35 @@
             `;
         }
 
-        /** 绑定自定义分组事件（使用 group 范围查询） */
+        /**
+         * Binds events for a newly created custom group block.
+         * @param {Element} groupDiv - The element for the custom group.
+         */
         bindCustomGroupEvents(groupDiv) {
-            const useBtn = groupDiv.querySelector('.use-existing');
-            const removeBtn = groupDiv.querySelector('.remove-group');
+            const useBtn = utils.querySafe('.use-existing', groupDiv);
+            const removeBtn = utils.querySafe('.remove-group', groupDiv);
 
-            if (useBtn) {
-                useBtn.addEventListener('click', (e) => {
-                    this.toggleFolderInput(e.target);
-                });
-            }
-            if (removeBtn) {
-                removeBtn.addEventListener('click', () => {
-                    groupDiv.remove();
-                });
-            }
+            if (useBtn) useBtn.addEventListener('click', (e) => this.toggleFolderInput(e.target));
+            if (removeBtn) removeBtn.addEventListener('click', () => groupDiv.remove());
         }
 
-        /** 切换文件夹输入类型（在分组内查找并替换） */
+        /**
+         * Toggles the folder name input between a text field (new folder) and a select dropdown (existing folder).
+         * @param {Element} button - The button that was clicked.
+         */
         toggleFolderInput(button) {
             const group = button.closest('.custom-group');
-            const input = group.querySelector('.folder-name');
-            const select = group.querySelector('select');
+            if (!group) return;
+
+            const input = utils.querySafe('.folder-name', group);
+            const select = utils.querySafe('select', group);
 
             if (input) {
                 const newSelect = document.createElement('select');
-                newSelect.className = 'bili-classifier-select';
+                newSelect.className = 'bili-classifier-select folder-name';
                 newSelect.innerHTML = `
                     <option value="">选择现有收藏夹</option>
-                    ${this.existingFolders.map(f =>
-                        `<option value="${f.id}">${f.title}</option>`
-                    ).join('')}
+                    ${this.existingFolders.map(f => `<option value="${f.id}">${f.title}</option>`).join('')}
                 `;
                 input.parentNode.replaceChild(newSelect, input);
                 button.textContent = '创建新收藏夹';
@@ -678,87 +1817,135 @@
             }
         }
 
-        /** 开始分类 */
+        /** Gathers the configuration and resolves the promise. */
         startClassify() {
+            if (!this.modal) return;
             const config = this.collectConfig();
             this.modal.remove();
-            this.resolve(config);
+            this.modal = null;
+            if (this.resolve) this.resolve(config);
         }
 
-        /** 收集配置（范围查询） */
+        /**
+         * Collects all user settings from the modal into a configuration object.
+         * @returns {object|null} The final configuration object, or null if modal is not present.
+         */
         collectConfig() {
-            const modal = this.modal;
+            if (!this.modal) return null;
+            const operationModeEl = utils.querySafe('input[name="operationMode"]:checked', this.modal);
+            const autoClassifyEl = utils.querySafe('#autoClassifyUnassigned', this.modal);
+
             const config = {
                 custom: [],
                 default: {},
-                operationMode: modal.querySelector('input[name="operationMode"]:checked')?.value || 'copy',
-                autoClassifyUnassigned: !!modal.querySelector('#autoClassifyUnassigned')?.checked
+                operationMode: operationModeEl ? operationModeEl.value : 'copy',
+                autoClassifyUnassigned: autoClassifyEl ? autoClassifyEl.checked : true
             };
 
-            modal.querySelectorAll('.custom-group').forEach(group => {
-                const nameInput = group.querySelector('.folder-name, select');
-                const selectedTids = Array.from(group.querySelectorAll('input[type="checkbox"]:checked'))
-                    .map(cb => cb.value);
+            // Collect custom group configurations
+            const customGroups = utils.queryAllSafe('.custom-group', this.modal);
+            customGroups.forEach(group => {
+                const nameInput = utils.querySafe('.folder-name', group);
+                const selectedTids = utils.queryAllSafe('input[type="checkbox"]:checked', group).map(cb => cb.value).filter(Boolean);
 
-                if (selectedTids.length > 0 && nameInput && (nameInput.value || (nameInput.tagName === 'SELECT' && nameInput.value))) {
+                if (selectedTids.length > 0 && nameInput) {
                     const isSelect = nameInput.tagName === 'SELECT';
-                    config.custom.push({
-                        name: isSelect ? nameInput.options[nameInput.selectedIndex].text : nameInput.value,
-                        isExisting: isSelect,
-                        fid: isSelect ? nameInput.value : null,
-                        tids: selectedTids
-                    });
+                    const name = isSelect ? nameInput.options[nameInput.selectedIndex]?.text : nameInput.value;
+                    const fid = isSelect ? nameInput.value : null;
+
+                    if (name && name.trim()) {
+                        config.custom.push({
+                            name: name.trim(),
+                            isExisting: isSelect && !!fid,
+                            fid: fid,
+                            tids: selectedTids
+                        });
+                    }
                 }
             });
 
+            // Determine default groups for auto-classification
             if (config.autoClassifyUnassigned) {
                 Object.keys(this.tidGroups).forEach(tid => {
-                    if (!config.custom.some(g => g.tids.includes(tid))) {
+                    const isAssigned = config.custom.some(g => g.tids.includes(tid));
+                    if (!isAssigned) {
                         config.default[tid] = this.tidGroups[tid][0].tname;
                     }
                 });
             }
-
             return config;
         }
 
-        /** 取消操作 */
+        /** Cancels the operation and rejects the promise. */
         cancel() {
-            this.modal.remove();
-            this.reject(new Error('用户取消操作'));
+            if (this.modal) {
+                this.modal.remove();
+                this.modal = null;
+            }
+            if (this.reject) {
+                this.reject(new Error('用户取消操作'));
+            }
         }
     }
 
-    // --- 分类处理器 ---
+    // --- Classification Processor ---
+
+    /**
+     * Orchestrates the entire classification process from start to finish.
+     * @class
+     */
     class ClassifyProcessor {
-        constructor() {
-            this.sourceFid = new URL(location.href).searchParams.get('fid');
+        /**
+         * @param {SettingsManager} settingsManager - An instance of the SettingsManager.
+         */
+        constructor(settingsManager) {
+            this.settingsManager = settingsManager;
+            this.sourceFid = this.getSourceFid();
             this.totalProcessed = 0;
             this.skippedVideos = 0;
         }
 
-        /** 执行分类流程 */
+        /**
+         * Extracts the source favorites folder ID from the current URL.
+         * @returns {string|null} The folder ID (fid).
+         */
+        getSourceFid() {
+            try {
+                return new URL(window.location.href).searchParams.get('fid');
+            } catch (error) {
+                return null;
+            }
+        }
+
+        /**
+         * Executes the main classification workflow.
+         */
         async process() {
             if (!this.sourceFid) {
                 throw new Error('未找到收藏夹ID，请在具体的收藏夹页面运行脚本。');
             }
 
             try {
-                utils.log('步骤 1/3: 开始获取收藏夹视频详情...');
-                const videos = await this.getVideosWithProgress();
+                const maxCount = this.settingsManager.getRecognitionLimit();
+                const countText = maxCount === Infinity ? '全部' : `前${maxCount}个`;
 
+                utils.log(`步骤 1/3: 开始获取收藏夹${countText}视频详情...`);
+                const videos = await this.getVideosWithProgress(maxCount);
                 if (!videos.length) {
                     alert('该收藏夹内没有找到有效视频。');
                     return;
                 }
 
-                utils.log('步骤 2/3: 获取完成，共找到有效视频');
+                utils.log(`步骤 2/3: 获取完成，共找到${videos.length}个有效视频`);
                 const tidGroups = this.groupVideosByTid(videos);
                 const userConfig = await this.showConfigModal(tidGroups);
+                if (!userConfig) {
+                    utils.log('用户取消配置', 'info');
+                    return;
+                }
 
                 utils.log('步骤 3/3: 开始执行分类操作...');
                 await this.executeClassification(userConfig, tidGroups, videos.length);
-
                 this.showCompletionMessage();
 
             } catch (error) {
@@ -768,17 +1955,26 @@
             }
         }
 
-        /** 获取视频数据并显示进度 */
-        async getVideosWithProgress() {
-            // 初始化读取进度卡片，显示已获取数量（total 未知，写为 ?）
-            uiManager.createProgressDiv('reading-progress', `正在读取视频 · 已获取 0 个视频`);
+        /**
+         * Fetches videos from the API while displaying a progress indicator.
+         * @param {number} maxCount - The maximum number of videos to fetch.
+         * @returns {Promise<Array<object>>} A promise resolving with the list of videos.
+         */
+        async getVideosWithProgress(maxCount) {
+            const countText = maxCount === Infinity ? '全部' : `前${maxCount}个`;
+            uiManager.createProgressDiv('reading-progress', `正在读取${countText}视频 · 已获取 0 个视频`);
 
             try {
-                // 传入 progress 回调，每获取一个视频更新已获取数量显示
-                const videos = await apiService.getFavVideos(this.sourceFid, CONFIG.BATCH_SIZE, 1, [], (count) => {
-                    uiManager.updateProgress('reading-progress', `正在读取视频 · 已获取 ${count} 个视频`, count, 0);
-                });
-
+                const videos = await apiService.getFavVideos(
+                    this.sourceFid,
+                    maxCount,
+                    CONFIG.BATCH_SIZE,
+                    1,
+                    [],
+                    (count) => {
+                        uiManager.updateProgress('reading-progress', `正在读取${countText}视频 · 已获取 ${count} 个视频`, count, 0);
+                    }
+                );
                 uiManager.removeProgress('reading-progress');
                 return videos;
             } catch (error) {
@@ -787,41 +1983,70 @@
             }
         }
 
-        /** 按分区分组视频 */
+        /**
+         * Groups an array of videos by their type ID (tid).
+         * @param {Array<object>} videos - The list of videos.
+         * @returns {object} An object where keys are tids and values are arrays of videos.
+         */
         groupVideosByTid(videos) {
             const groups = {};
             videos.forEach(video => {
-                if (!groups[video.tid]) groups[video.tid] = [];
+                if (!groups[video.tid]) {
+                    groups[video.tid] = [];
+                }
                 groups[video.tid].push(video);
             });
             return groups;
         }
 
-        /** 显示配置模态框 */
+        /**
+         * Displays the configuration modal to the user.
+         * @param {object} tidGroups - Videos grouped by tid.
+         * @returns {Promise<object|null>} The user's configuration, or null if canceled.
+         */
         async showConfigModal(tidGroups) {
-            const modal = new ConfigModal(tidGroups);
-            return await modal.create();
+            try {
+                const modal = new ConfigModal(tidGroups);
+                return await modal.create();
+            } catch (error) {
+                if (error.message !== '用户取消操作') {
+                    utils.log('配置模态框错误: ' + error.message, 'error');
+                }
+                return null;
+            }
         }
 
-        /** 执行分类操作 */
+        /**
+         * Executes the classification based on the user's configuration.
+         * @param {object} userConfig - The configuration from the modal.
+         * @param {object} tidGroups - Videos grouped by tid.
+         * @param {number} totalVideos - The total number of videos to process.
+         */
         async executeClassification(userConfig, tidGroups, totalVideos) {
-            uiManager.updateProgress('fav-progress', '正在准备分组和创建收藏夹...', 0, totalVideos);
-
+            uiManager.createProgressDiv('fav-progress', '正在准备分组和创建收藏夹...');
+            // Process user-defined custom groups
             for (const group of userConfig.custom) {
-                await this.processCustomGroup(group, tidGroups, userConfig.operationMode, totalVideos);
+                await this.processGroup(group, tidGroups, userConfig.operationMode, totalVideos);
             }
 
+            // Process remaining default groups if auto-classify is enabled
             if (userConfig.autoClassifyUnassigned) {
                 for (const [tid, folderName] of Object.entries(userConfig.default)) {
-                    await this.processDefaultGroup(tid, folderName, tidGroups, userConfig.operationMode, totalVideos);
+                    const groupConfig = { name: folderName, tids: [tid] };
+                    await this.processGroup(groupConfig, tidGroups, userConfig.operationMode, totalVideos);
                 }
             }
         }
 
-        /** 处理自定义分组 */
-        async processCustomGroup(group, tidGroups, operationMode, totalVideos) {
+        /**
+         * Processes a single group of videos (either custom or default).
+         * @param {object} group - The group configuration.
+         * @param {object} tidGroups - All videos grouped by tid.
+         * @param {string} operationMode - 'copy' or 'move'.
+         * @param {number} totalVideos - The total number of videos.
+         */
+        async processGroup(group, tidGroups, operationMode, totalVideos) {
             const { targetFid, folderName } = await this.getOrCreateFolder(group);
-
             for (const tid of group.tids) {
                 if (tidGroups[tid]) {
                     await this.processVideosInGroup(tidGroups[tid], targetFid, folderName, operationMode, totalVideos);
@@ -829,59 +2054,60 @@
             }
         }
 
-        /** 处理默认分组 */
-        async processDefaultGroup(tid, folderName, tidGroups, operationMode, totalVideos) {
-            const targetFid = await this.findOrCreateFolder(folderName);
-
-            if (tidGroups[tid]) {
-                await this.processVideosInGroup(tidGroups[tid], targetFid, folderName, operationMode, totalVideos);
-            }
-        }
-
-        /** 获取或创建文件夹 */
+        /**
+         * Gets the target folder ID, creating the folder if it doesn't exist.
+         * @param {object} group - The group configuration containing folder name and type.
+         * @returns {Promise<{targetFid: string, folderName: string}>} The folder ID and name.
+         */
         async getOrCreateFolder(group) {
             let targetFid;
             let folderName = group.name;
 
-            if (group.isExisting) {
+            if (group.isExisting && group.fid) {
                 targetFid = group.fid;
                 utils.log(`使用现有收藏夹: "${folderName}"`, 'info');
             } else {
                 targetFid = await this.findOrCreateFolder(folderName);
             }
-
             return { targetFid, folderName };
         }
 
-        /** 查找或创建文件夹 */
+        /**
+         * Finds a folder by name, or creates it if not found.
+         * @param {string} folderName - The name of the folder.
+         * @returns {Promise<string>} The folder ID.
+         */
         async findOrCreateFolder(folderName) {
             const existingFolders = await apiService.getUserFavLists();
             const existingFolder = existingFolders.find(f => f.title && f.title.trim() === folderName.trim());
-
             if (existingFolder) {
                 utils.log(`使用现有收藏夹: "${folderName}"`, 'info');
                 return existingFolder.id;
             } else {
                 const newFid = await apiService.createFolder(folderName);
                 utils.log(`创建新收藏夹: "${folderName}"`, 'success');
-                await utils.delay(500);
+                await utils.delay(500); // Wait for creation to propagate
                 return newFid;
             }
         }
 
-        /** 处理组内视频 */
+        /**
+         * Adds/moves a list of videos to a target folder.
+         * @param {Array<object>} videos - The videos to process.
+         * @param {string} targetFid - The ID of the target folder.
+         * @param {string} folderName - The name of the target folder for logging.
+         * @param {string} operationMode - 'copy' or 'move'.
+         * @param {number} totalVideos - The total number of videos for progress calculation.
+         */
         async processVideosInGroup(videos, targetFid, folderName, operationMode, totalVideos) {
             for (const video of videos) {
                 try {
                     await apiService.addToFav(video.aid, targetFid);
-
                     if (operationMode === 'move') {
                         await apiService.removeFromFav(video.aid, this.sourceFid);
                     }
-
                     this.totalProcessed++;
                     utils.log(`处理视频成功: ${video.title} → "${folderName}"`, 'success');
-
                 } catch (error) {
                     utils.log(`处理视频失败: ${video.title} - ${error.message}`, 'error');
                     this.skippedVideos++;
@@ -894,52 +2120,76 @@
                     totalVideos,
                     this.skippedVideos
                 );
-
                 await utils.delay(CONFIG.RATE_LIMIT_DELAY);
             }
         }
 
-        /** 显示完成消息 */
+        /**
+         * Displays a final completion message to the user.
+         */
         showCompletionMessage() {
-            utils.log(`分类完成！处理了 ${this.totalProcessed} 个视频，跳过了 ${this.skippedVideos} 个视频`, 'success');
-            const msg = `分类完成！处理了 ${this.totalProcessed} 个视频，跳过了 ${this.skippedVideos} 个视频`;
-            alert(msg);
-            // alert 返回后（用户点击确认），如果为移动模式则刷新页面以更新原收藏夹显示
-            try {
-                const op = document.querySelector('input[name="operationMode"]:checked')?.value;
-                if (op === 'move') {
-                    location.reload();
-                }
-            } catch (e) {
-                /* 忽略刷新异常 */
+            const message = `分类完成！处理了 ${this.totalProcessed} 个视频，跳过了 ${this.skippedVideos} 个视频`;
+            utils.log(message, 'success');
+            alert(message);
+        }
+
+        /**
+         * Handles any critical errors during the process.
+         * @param {Error} error - The error object.
+         */
+        handleError(error) {
+            if (error.message !== '用户取消操作') {
+                utils.log(`操作失败: ${error.message}`, 'error');
+                alert('操作失败：' + error.message);
             }
         }
 
-        /** 处理错误 */
-        handleError(error) {
-            utils.log(`操作失败: ${error.message}`, 'error');
-            alert('操作失败：' + error.message);
-        }
-
-        /** 清理资源 */
+        /**
+         * Cleans up any UI elements created by the script.
+         */
         cleanup() {
             uiManager.removeProgress('fav-progress');
             uiManager.removeProgress('reading-progress');
         }
     }
 
-    // --- 初始化 ---
+    // --- Initialization ---
+
+    /**
+     * Initializes the script by creating UI elements and attaching event listeners.
+     */
     function init() {
-        // 创建触发按钮
+        if (window.biliClassifierInitialized) {
+            return;
+        }
+        window.biliClassifierInitialized = true;
+
+        const settingsManager = new SettingsManager();
+
         const btnContainer = document.createElement('div');
         btnContainer.className = 'bili-classifier-float-btn';
 
-        const btn = document.createElement('button');
-        btn.className = 'bili-classifier-btn';
-        btn.textContent = '按分区分类';
-        btn.addEventListener('click', () => {
-            new ClassifyProcessor().process();
-        });
+        const mainButtons = document.createElement('div');
+        mainButtons.className = 'bili-classifier-main-buttons';
+
+        const settingsBtn = document.createElement('button');
+        settingsBtn.className = 'bili-classifier-btn icon';
+        settingsBtn.title = '界面设置';
+        settingsBtn.type = 'button';
+        settingsBtn.innerHTML = `
+            <svg viewBox="0 0 24 24" fill="currentColor" style="width: 16px; height: 16px;">
+                <path d="M12 15.5A3.5 3.5 0 0 1 8.5 12 3.5 3.5 0 0 1 12 8.5a3.5 3.5 0 0 1 3.5 3.5 3.5 3.5 0 0 1-3.5 3.5m7.43-2.53c.04.32.07.64.07.97 0 .33-.03.65-.07.97l2.11 1.65c.19.15.24.42.12.64l-2 3.46c-.12.22-.39.3-.61.22l-2.49-1c-.52.39-1.08.73-1.69.98l-.38 2.65c-.03.24-.24.42-.49.42h-4c-.25 0-.46-.18-.49-.42l-.38-2.65c-.61-.25-1.17-.59-1.69-.98l-2.49 1c-.23.09-.49 0-.61-.22l-2-3.46c-.13-.22-.07-.49.12-.64l2.11-1.65c-.04-.32-.07-.65-.07-.97 0-.32.03-.65.07-.97L2.54 11.2c-.19-.15-.24-.42-.12-.64l2-3.46c.12-.22.39-.3.61-.22l2.49 1c.52-.39 1.08-.73 1.69-.98l.38-2.65c.03-.24.24-.42.49-.42h4c.25 0 .46.18.49-.42l.38 2.65c.61.25 1.17.59 1.69.98l2.49-1c.23-.09.49 0 .61-.22l2 3.46c.12.22.07.49-.12.64l-2.11 1.65Z"/>
+            </svg>
+        `;
+
+        const classifyBtn = document.createElement('button');
+        classifyBtn.className = 'bili-classifier-btn primary';
+        classifyBtn.textContent = '按分区分类';
+        classifyBtn.type = 'button';
+
+        mainButtons.appendChild(settingsBtn);
+        mainButtons.appendChild(classifyBtn);
+        btnContainer.appendChild(mainButtons);
 
         const links = document.createElement('div');
         links.className = 'bili-classifier-float-links';
@@ -947,12 +2197,34 @@
             <a href="https://space.bilibili.com/484456494" target="_blank" class="bili-classifier-link-btn">我的B站</a>
             <a href="https://github.com/RSLN-creator/T-UserScript" target="_blank" class="bili-classifier-link-btn">GitHub</a>
         `;
-
-        btnContainer.appendChild(btn);
         btnContainer.appendChild(links);
         document.body.appendChild(btnContainer);
+
+        settingsBtn.addEventListener('click', async () => {
+            try {
+                const saved = await settingsManager.showSettingsModal();
+                if (saved) {
+                    const limit = settingsManager.getRecognitionLimit();
+                    const modeText = settingsManager.settings.recognitionMode === 'all' ? '全部识别' : `自定义识别 (最多${limit}个)`;
+                    const themeText = settingsManager.settings.theme === 'dark' ? '深色' : '浅色';
+                    utils.log(`界面设置已更新: ${modeText}, ${themeText}主题`, 'success');
+                }
+            } catch (error) {
+                utils.log('设置模态框错误: ' + error.message, 'error');
+            }
+        });
+
+        classifyBtn.addEventListener('click', () => {
+            new ClassifyProcessor(settingsManager).process().catch(error => {
+                utils.log('分类处理器错误: ' + error.message, 'error');
+            });
+        });
     }
 
-    // 启动脚本
-    init();
+    // --- Script Entry Point ---
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', init);
+    } else {
+        setTimeout(init, 100); // Delay to ensure page scripts have loaded
+    }
 })();
